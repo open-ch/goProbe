@@ -1,0 +1,28 @@
+diff -ruN libpcap-1.4.0/pcap/pcap.h libpcap-1.4.0_mod/pcap/pcap.h
+--- libpcap-1.4.0/pcap/pcap.h	2013-03-24 22:48:24.000000000 +0100
++++ libpcap-1.4.0_mod/pcap/pcap.h	2014-05-27 20:27:39.508122916 +0200
+@@ -163,6 +163,7 @@
+ 	struct timeval ts;	/* time stamp */
+ 	bpf_u_int32 caplen;	/* length of portion present */
+ 	bpf_u_int32 len;	/* length this packet (off wire) */
++	u_int8_t inbound;
+ };
+ 
+ /*
+diff -ruN libpcap-1.4.0/pcap-linux.c libpcap-1.4.0_mod/pcap-linux.c
+--- libpcap-1.4.0/pcap-linux.c	2013-03-24 22:48:24.000000000 +0100
++++ libpcap-1.4.0_mod/pcap-linux.c	2014-05-27 20:26:25.937085581 +0200
+@@ -3862,6 +3862,13 @@
+ 		 * Do checks based on packet direction.
+ 		 */
+ 		sll = (void *)h.raw + TPACKET_ALIGN(handle->md.tp_hdrlen);
++		
++		if (sll->sll_pkttype == PACKET_OUTGOING)
++			pcaphdr.inbound = 0;
++		else
++                	pcaphdr.inbound = 1;
++
++
+ 		if (sll->sll_pkttype == PACKET_OUTGOING) {
+ 			/*
+ 			 * Outgoing packet.

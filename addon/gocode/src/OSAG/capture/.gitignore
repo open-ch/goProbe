@@ -1,0 +1,6 @@
+*.csv
+*.pcap
+*.prof
+*.mprof
+GPCore
+*goProbe

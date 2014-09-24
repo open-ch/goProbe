@@ -1,0 +1,2 @@
+# Run goprobe database cleanup (retention time 30 days)
+3 3 * * *  root test -e /usr/local/goProbe/data/db && CURRENT_EPOCH=`date +\%s` && /usr/local/goProbe/shared/goquery -x -clean `expr $CURRENT_EPOCH - 2592000` > /dev/null 2>&1

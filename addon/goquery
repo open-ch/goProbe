@@ -1,0 +1,36 @@
+#!/bin/bash
+################################################################################ 
+# 
+# goquery
+# 
+# Wrapper script used for querying the go database and nicing the process
+# appropriately 
+# 
+# Written by Lennart Elsen lel@open.ch, August 2014 
+# Copyright (c) 2014 Open Systems AG, Switzerland 
+# All Rights Reserved.
+#
+################################################################################
+
+#-------------------------------------------------------------------------------
+# Global Constants
+#-------------------------------------------------------------------------------
+PKG=goProbe
+
+GQNAME="goQuery"
+GQNICEVAL=10
+
+# read in the arguments as they are supposed to be passed to goQuery
+args=""
+for i in "$@"; do
+    if [[ "$i" =~ "=" ]]; then
+	tmpvar=$(echo $i | sed 's# ##g')
+        args=$args"$tmpvar "
+    else
+	args=$args"$i "
+    fi
+done
+
+# run goQuery with specified nice value
+export LD_LIBRARY_PATH=/usr/local/$PKG/lib
+nice -n $GQNICEVAL /usr/local/$PKG/bin/${GQNAME} ${args}
