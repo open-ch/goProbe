@@ -3,9 +3,10 @@ goProbe
 
 This package comprises:
 
-* goProbe - A lightweight, concurrent, network packet aggregator
-* goDB - A small, columnar database
-* goQuery - A query front-end used to read out data acquired by goProbe and stored by goDB
+* goProbe   - A lightweight, concurrent, network packet aggregator
+* goDB      - A small, high-performance, columnar database
+* goQuery   - Query front-end used to read out data acquired by goProbe and stored by goDB
+* goConvert - Helper binary to convert goProbe-flow data stored in `csv` files
 
 As the name suggests, all components are written in Google [go](https://golang.org/).
 
@@ -48,6 +49,8 @@ The capturing probe can be run as a daemon via
 ```
 /etc/init.d/goprobe.init {start|stop|status|restart|force-reload}
 ```
+
+By default, the interface `eth0` is specified. If you want to perform capturing on other interfaces, change the respective line in `goprobe.init` (the variable `DAEMON_ARGS` stores the interfaces).
 
 goDB
 --------------------------
@@ -96,12 +99,25 @@ Query produced 779 hits and took 33.66236ms
 Overall packets: 79.07 M , Overall data volume: 32.44 GB
 ```
 
+### Converting data
+
+If you use `goConvert`, you need to make sure that the data which you are importing is _temporally ordered_ and provides a column which stores UNIX timestamps. An example `csv` file may look as follows:
+
+```
+# HEADER: bytes_rcvd,bytes_sent,dip,dport,l7_proto,packets_rcvd,packets_sent,proto,sip,tstamp
+...
+40,72,172.23.34.171,8080,158,1,1,6,10.11.72.28,1392997558
+40,72,172.23.34.171,49362,158,1,1,6,10.11.72.28,1392999058
+...
+``` 
+You _must_ abide by this structure, otherwise the conversion will fail.
 Installation
 ------------
 
-This package was designed to work out of the box. Thus, you do not even need the `go` environment. All of the dependencies are downloaded during package configuration. To install the package, go to the directory into which you cloned this repository and run the following commands (as `root`):
+This package was designed to work out of the box. Thus, you do not even need the `go` environment. All of the dependencies are downloaded during package configuration. To install the package, go to the directory into which you cloned this repository and run the following commands:
 
 ```
+sudo -s
 make all
 ```
 
@@ -111,6 +127,22 @@ Above command runs the following targets:
 * `make configure`: downloads the dependencies, configures them and applies patches (if necessary)
 * `make compile`: compiles dependencies, goProbe and goQuery 
 * `make install`: set up package as a binary tree. The binaries and used libraries are placed in `/usr/local/goProbe` per default. The init script can be found under `/etc/init.d/goprobe.init`. It is also possible to install a cronjob used to clean up outdated database entries. It is not installed by default. Uncomment the line in the Makefile if you need this feature. The cronjob can be found in `/etc/cron.d/goprobe.cron`
+
+By default, `goConvert` is not compiled. If you wish to do so, add the following line to the `install` target in the Makefile:
+
+```
+go build -a -o goConvert $(PWD)/addon/gocode/src/OSAG/convert/DBConvert.go
+```
+The binary will reside in the directory specified in the above command.
+
+### Supported Operating Systems
+
+goProbe is currently set up to run on Linux based systems. Tested versions include:
+
+* Ubuntu 14.04
+* Debian 7
+
+Support for Mac OS X will follow eventually.
 
 Authors & Contributors
 ----------------------

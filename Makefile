@@ -2,8 +2,8 @@
 #
 # Makefile: Makefile to build the goProbe traffic monitor
 #
-# Written by Fabian  Kohn  fko@open.ch
-#        and Lennart Elsen lel@open.ch, August 2014
+# Written by Lennart Elsen 
+#        and Fabian  Kohn, August 2014
 # Copyright (c) 2014 Open Systems AG, Switzerland
 # All Rights Reserved.
 #
