@@ -53,7 +53,7 @@ var SysLog *GPLog = &GPLog{nil}
 func InitGPLog() error {
     var err error
     var Log *syslog.Writer
-	if Log, err = syslog.New(syslog.LOG_NOTICE, "goDB"); err != nil {
+	if Log, err = syslog.New(syslog.LOG_NOTICE, "goProbe"); err != nil {
         return err;
     }
     SysLog.Log = Log

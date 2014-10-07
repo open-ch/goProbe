@@ -114,7 +114,12 @@ You _must_ abide by this structure, otherwise the conversion will fail.
 Installation
 ------------
 
-This package was designed to work out of the box. Thus, you do not even need the `go` environment. All of the dependencies are downloaded during package configuration. To install the package, go to the directory into which you cloned this repository and run the following commands:
+Before running the installer, make sure that you have the following dependencies installed:
+* yacc
+* bison
+* curl
+
+The package itself was designed to work out of the box. Thus, you do not even need the `go` environment. All of the dependencies are downloaded during package configuration. To install the package, go to the directory into which you cloned this repository and run the following commands:
 
 ```
 sudo -s
