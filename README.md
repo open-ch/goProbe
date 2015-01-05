@@ -47,10 +47,12 @@ Capturing is performed concurrently by goProbe on multiple interfaces which are 
 The capturing probe can be run as a daemon via
 
 ```
-/etc/init.d/goprobe.init {start|stop|status|restart|force-reload}
+/etc/init.d/goprobe.init {start|stop|status|restart|reload|force-reload}
 ```
 
 By default, the interface `eth0` is specified. If you want to perform capturing on other interfaces, change the respective line in `goprobe.init` (the variable `DAEMON_ARGS` stores the interfaces).
+
+__Update:__ version 1.05 supports the interface specification via a configuration file which should be saved as `/usr/local/goProbe/etc/goprobe.conf` and include a space-delimited list of interfaces on which capturing should be performed. In order for the changes to take effect the `reload` target should be used.
 
 goDB
 --------------------------
@@ -71,7 +73,7 @@ goQuery
 
 ### Usage
 
-For more information, type `/usr/local/goProbe/bin/goQuery -h`
+For a comprehensive help on how to use goQuery type `/usr/local/goProbe/bin/goQuery -h`
 
 Example Output
 ------
