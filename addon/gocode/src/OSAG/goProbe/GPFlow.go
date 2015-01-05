@@ -4,8 +4,7 @@
 //
 // Main flow structure which is put into the GPMatrix and which is updated according to packet information
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, May 2014
+// Written by Lennart Elsen and Fabian Kohn, May 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
@@ -153,11 +152,13 @@ func (f *GPFlow) UpdateFlow(packet *GPPacket) {
 // routine that a flow uses to check whether it has any interesting layer 7 info
 // worth keeping and whether its counters are non-zero. If they are, it means that
 // the flow was essentially idle in the last time interval and that it can be safely
-// discarded
+// discarded.
+// Updated: also carries over the flows where a direction could be identified
 func (f *GPFlow) IsWorthKeeping() bool {
 
-	// first check if the flow stores and identified layer 7 protocol
-	if f.hasIdentifiedL7Proto() {
+	// first check if the flow stores and identified the layer 7 protocol or if the
+    // flow stores direction information
+	if f.hasIdentifiedL7Proto() || f.hasIdentifiedDirection() {
 
 		// check if any entries have been updated lately
 		if !(f.HasBeenIdle()) {
@@ -178,6 +179,10 @@ func (f *GPFlow) Reset() {
 
 func (f *GPFlow) hasIdentifiedL7Proto() bool {
 	return f.l7proto > 3
+}
+
+func (f *GPFlow) hasIdentifiedDirection() bool {
+	return f.pktDirectionSet
 }
 
 func (f *GPFlow) HasBeenIdle() bool {

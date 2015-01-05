@@ -5,8 +5,7 @@
 // Binary to read in database data from csv files and push it to the goDB writer
 // which creates a .gpf columnar database from the data at a specified location.
 // 
-// Written by Lennart Elsen, July 2014
-//        and Fabian  Kohn
+// Written by Lennart Elsen and Fabian Kohn, July 2014 
 // Copyright (c) 2014 Open Systems AG, Switzerland 
 // All Rights Reserved.
 //

@@ -2,8 +2,7 @@
 #
 # Makefile: Makefile to build the goProbe traffic monitor
 #
-# Written by Lennart Elsen 
-#        and Fabian  Kohn, August 2014
+# Written by Lennart Elsen and Fabian Kohn, August 2014
 # Copyright (c) 2014 Open Systems AG, Switzerland
 # All Rights Reserved.
 #
@@ -38,12 +37,12 @@ DOWNLOAD	= curl --progress-bar -L --url
 INST		= install
 
 # GoLang main version
-GO_PRODUCT	= goProbe
+GO_PRODUCT	    = goProbe
 GO_QUERY        = goQuery
 
-GOLANG		= go1.3.1.linux-amd64
-GOLANG_SITE	= https://storage.googleapis.com/golang
-GO_SRCDIR	= $(PWD)/addon/gocode/src
+GOLANG		    = go1.4.linux-amd64
+GOLANG_SITE	    = https://storage.googleapis.com/golang
+GO_SRCDIR	    = $(PWD)/addon/gocode/src
 GO_CPU_PROFILE  = 0 
 
 # for providing the go compiler with the right env vars
@@ -52,29 +51,29 @@ export PATH := $(GOROOT)/bin:$(PATH)
 export GOPATH := $(PWD)/addon/gocode
 
 # gopacket and gopcap
-GOPACKET	= v1.1.7
-GOPACKET_REV	= 40224af0781c 
+GOPACKET	    = v1.1.9
+GOPACKET_REV	= v1.1.9 
 GOPACKET_SITE	= https://gopacket.googlecode.com/archive
-GOPACKETDIR	= code.google.com/p
+GOPACKETDIR	    = code.google.com/p
 
 # pcap libraries
-PCAP		= libpcap-1.4.0
-PCAP_SITE	= http://www.tcpdump.org/release
-PCAP_DIR	= $(PWD)/$(PCAP)
+PCAP_VERSION = 1.5.3
+PCAP		 = libpcap-$(PCAP_VERSION)
+PCAP_SITE	 = http://www.tcpdump.org/release
+PCAP_DIR	 = $(PWD)/$(PCAP)
 
 # libprotoident libraries
-LIBTRACE	= libtrace-3.0.20
+LIBTRACE	    = libtrace-3.0.20
 LIBTRACE_SITE	= http://research.wand.net.nz/software/libtrace
 LIBTRACE_DIR	= $(PWD)/$(LIBTRACE)
 
 LIBPROTOIDENT	= libprotoident-2.0.7
 LPIDENT_SITE	= http://research.wand.net.nz/software/libprotoident
-LPIDENT_DIR	= $(PWD)/$(LIBPROTOIDENT)
+LPIDENT_DIR	    = $(PWD)/$(LIBPROTOIDENT)
 export LD_LIBRARY_PATH := $(PWD)/$(PCAP):$(PWD)/$(LIBPROTOIDENT)/lib/.libs:$(PWD)/$(LIBTRACE)/lib/.libs:$(PWD)/addon/dpi
 
 configure:
 
-	echo $(GO_SRCDIR)	
 	## GO SETUP ##
 ifeq ($(GO_CPU_PROFILE),0)
 	echo "*** removing cpu profiling options in $(GO_PRODUCT) and $(GO_QUERY) ***"
@@ -95,7 +94,7 @@ endif
 	tar -zxf $(GOPACKET).tar.gz
 	mv gopacket-$(GOPACKET) gopacket
 
-	patch -Np0 < addon/gopacket.patch
+	patch -Np0 < addon/gopacket-$(GOPACKET).patch
 
 	# change the library path inside pcap.go
 	sed -i -e 's#LIBPCAPPATH#$(PCAP_DIR)#g' gopacket/pcap/pcap.go
@@ -107,7 +106,7 @@ endif
 	$(DOWNLOAD) $(PCAP_SITE)/$(PCAP).tar.gz -O 
 	echo "*** unpacking/patching/configuring dependency $(PCAP) ***"
 	tar -zxf $(PCAP).tar.gz
-	patch -Np0 < addon/libpcap.patch
+	patch -Np0 < addon/libpcap-$(PCAP_VERSION).patch
 	cd $(PCAP); sh configure --prefix=/usr/local/$(PKG) --quiet >> /dev/null
 
 	echo "*** downloading $(LIBTRACE) ***"
@@ -125,7 +124,7 @@ compile:
 	## GO CODE COMPILATION ##
 	# first, compile libpcap and libprotoident because the go code depends on it
 	echo "*** compiling $(PCAP) ***"
-	cd $(PCAP); make -s > /dev/null; ln -fs libpcap.so.1.4.0 libpcap.so.1; ln -fs libpcap.so.1.4.0 libpcap.so
+	cd $(PCAP); make -s > /dev/null; rm libpcap.a; ln -sf libpcap.so.$(PCAP_VERSION) libpcap.so
 
 	echo "*** compiling lz4 ***"
 	cd addon/lz4; make -s > /dev/null 
@@ -147,7 +146,7 @@ compile:
 	addon/dpi/serialize_ipprot_list.sh >> $(GO_SRCDIR)/OSAG/goDB/GPDPIProtocols.go
 
 	echo "*** compiling $(GO_PRODUCT) ***"
-	cd $(GO_SRCDIR)/OSAG/capture; go build -a -o $(GO_PRODUCT)
+	cd $(GO_SRCDIR)/OSAG/capture; CGO_CFLAGS='-I$(PCAP_DIR)' CGO_LDFLAGS='-L$(PCAP_DIR)' go build -a -o $(GO_PRODUCT)   # build th    e goProbe binary
 
 	echo "*** compiling $(GO_QUERY) ***"
 	cd $(GO_SRCDIR)/OSAG/query; go build -a -o $(GO_QUERY) 

@@ -5,8 +5,7 @@
 // Helper struct storing the fundamental (flow-invariant) information such as src_ip
 // and dst_ip, ports and proto
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, May 2014
+// Written by Lennart Elsen and Fabian Kohn, May 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //

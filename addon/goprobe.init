@@ -110,6 +110,25 @@ case "$1" in
         fi
     exit $retval
         ;;
+  reload)
+    retval=0
+    echo -n "Reloading configuration ................... "
+    pid=`pgrep -f "$DAEMON $DAEMON_ARGS"`
+    if [ "$pid" != "" ]; then
+          err=$( kill -12 $pid 2>&1 | sed 's/^kill: //g' )
+          if [ $? -ne 0 ]; then
+              retval=1
+              echo -e "\e[00;31mFAIL\e[00m $err"
+              exit $retval
+          fi
+          
+          echo -e "\e[00;32mOK\e[00m"
+    else
+          echo -e "\e[00;31mFAIL\e[00m (not running)"
+          retval=1
+    fi
+    exit $retval
+        ;;
   restart|force-reload)
     log_daemon_msg "Restarting $DESC" "$NAME"
     do_stop

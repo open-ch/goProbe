@@ -5,8 +5,7 @@
 // Logging Interface that all other interfaces get access to in order to write 
 // error messages to the underlying system logging facilities
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, May 2014
+// Written by Lennart Elsen and Fabian Kohn, May 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
@@ -33,94 +32,17 @@ import (
 	"log/syslog"
 )
 
-type GPLogger interface{
-    Err() error
-    Debug() error
-    Alert() error
-    Crit() error
-    Emerg() error
-    Info() error
-    Notice() error
-    Warning() error
-}
+var SysLog *syslog.Writer
 
-type GPLog struct{
-    Log *syslog.Writer
-}
-
-var SysLog *GPLog = &GPLog{nil}
+const SLOG_ADDR = "127.0.0.1"
+const SLOG_PORT = "514"
 
 func InitGPLog() error {
+
     var err error
-    var Log *syslog.Writer
-	if Log, err = syslog.New(syslog.LOG_NOTICE, "goProbe"); err != nil {
+	if SysLog, err = syslog.Dial("udp", SLOG_ADDR+":"+SLOG_PORT, syslog.LOG_NOTICE, "goProbe"); err != nil {
         return err;
     }
-    SysLog.Log = Log
-
     return nil;
 }
 
-// deferral function
-func LogDefer() {
-    recover()
-}
-
-// syslog wrapper functions
-func(l *GPLog) Err(msg string) error {
-    if l.Log != nil {
-        return l.Log.Err(msg)
-    }
-    defer LogDefer()
-    return nil;
-}
-func(l *GPLog) Debug(msg string) error {
-    if l.Log != nil {
-        return l.Log.Debug(msg)
-    }
-    defer LogDefer()
-    return nil;
-}
-
-func(l *GPLog) Alert(msg string) error {
-    if l.Log != nil {
-        return l.Log.Alert(msg)
-    }
-    defer LogDefer()
-    return nil;
-}
-func(l *GPLog) Crit(msg string) error {
-    if l.Log != nil {
-        return l.Log.Crit(msg)
-    }
-    defer LogDefer()
-    return nil;
-}
-func(l *GPLog) Emerg(msg string) error {
-    if l.Log != nil {
-        return l.Log.Emerg(msg)
-    }
-    defer LogDefer()
-    return nil;
-}
-func(l *GPLog) Info(msg string) error {
-    if l.Log != nil {
-        return l.Log.Info(msg)
-    }
-    defer LogDefer()
-    return nil;
-}
-func(l *GPLog) Notice(msg string) error {
-    if l.Log != nil {
-        return l.Log.Notice(msg)
-    }
-    defer LogDefer()
-    return nil;
-}
-func(l *GPLog) Warning(msg string) error {
-    if l.Log != nil {
-        return l.Log.Warning(msg)
-    }
-    defer LogDefer()
-    return nil;
-}

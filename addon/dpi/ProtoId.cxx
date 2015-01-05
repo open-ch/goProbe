@@ -6,8 +6,7 @@
 // approrpiate functions and exposing the API to C (which, in turn, can be used
 // by Google Go).
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, July 2014
+// Written by Lennart Elsen and Fabian Kohn, July 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 // 
@@ -28,7 +27,6 @@
 * along with goProbe; if not, write to the Free Software
 * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
-
 #include "ProtoId.h"
 
 #include <stdio.h>

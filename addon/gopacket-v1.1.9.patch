@@ -1,0 +1,102 @@
+diff -rupN gopacket/layers/enums.go gopacket_patched/layers/enums.go
+--- gopacket/layers/enums.go	2014-08-19 18:36:40.000000000 +0200
++++ gopacket_patched/layers/enums.go	2014-08-19 19:20:17.446199754 +0200
+@@ -96,6 +96,7 @@ const (
+ 	LinkTypeSLIP           LinkType = 8
+ 	LinkTypePPP            LinkType = 9
+ 	LinkTypeFDDI           LinkType = 10
++	LinkTypeOVPN           LinkType = 12 // OSAG fix to support OpenVPN tunnels
+ 	LinkTypeATM_RFC1483    LinkType = 100
+ 	LinkTypeRaw            LinkType = 101
+ 	LinkTypePPP_HDLC       LinkType = 50
+@@ -478,6 +479,11 @@ func init() {
+ 	LinkTypeMetadata[LinkTypeNull] = EnumMetadata{DecodeWith: gopacket.DecodeFunc(decodeLoopback), Name: "Null"}
+ 	LinkTypeMetadata[LinkTypeLoop] = EnumMetadata{DecodeWith: gopacket.DecodeFunc(decodeLoopback), Name: "Loop"}
+ 	LinkTypeMetadata[LinkTypeRaw] = EnumMetadata{DecodeWith: gopacket.DecodeFunc(decodeIPv4or6), Name: "Raw"}
++
++	// link type decoder settings added by OSAG
++    LinkTypeMetadata[LinkTypeOVPN] = EnumMetadata{DecodeWith: gopacket.DecodeFunc(decodeIPv4or6), Name: "OVPN"}
++    LinkTypeMetadata[LinkTypeLinuxSLL] = EnumMetadata{DecodeWith: gopacket.DecodeFunc(decodeIPv4or6), Name: "SLL"}
++
+ 	LinkTypeMetadata[LinkTypePFLog] = EnumMetadata{DecodeWith: gopacket.DecodeFunc(decodePFLog), Name: "PFLog"}
+ 	LinkTypeMetadata[LinkTypeIEEE80211Radio] = EnumMetadata{DecodeWith: gopacket.DecodeFunc(decodeRadioTap), Name: "RadioTap"}
+ 
+diff -rupN gopacket/packet.go gopacket_patched/packet.go
+--- gopacket/packet.go	2014-08-19 18:36:39.000000000 +0200
++++ gopacket_patched/packet.go	2014-08-19 19:33:21.344275642 +0200
+@@ -28,6 +28,9 @@ type CaptureInfo struct {
+ 	// Length is the size of the original packet.  Should always be >=
+ 	// CaptureLength.
+ 	Length int
++	// OSAG addon: inbound specifies the direction from which the interface
++	// receives the packet
++	Inbound uint8
+ }
+ 
+ // PacketMetadata contains metadata for a packet.
+@@ -88,6 +91,10 @@ type Packet interface {
+ 	Data() []byte
+ 	// Metadata returns packet metadata associated with this packet.
+ 	Metadata() *PacketMetadata
++
++	// OSAG addon: function to strip GRE headers from the packet in order to make
++	// it decodable by the other layer functions
++	StripHeaders(ltype int)
+ }
+ 
+ // packet contains all the information we need to fulfill the Packet interface,
+@@ -700,3 +707,41 @@ func (p *PacketSource) Packets() chan Pa
+ 	}
+ 	return p.c
+ }
++
++// OSAG: this function should be used whenever something does not work out of the
++// box with special link types. The header stripping logic unfortunately has to be
++// adapted for every non-standard protocol that is observed in the wild.
++//
++// Current cases: GRE encapsulated packets
++func (p *packet) StripHeaders(ltype int){
++    // start off with checking whether we are actually facing the SLL link type
++	if ltype == 113 {
++        // check whether we can directly pull the IP version information from
++        // the packet header
++		var version byte = p.data[0] >> 4
++		if version != 4 && version != 6 {
++            // try to pull IP version information from an assumed GRE encapsulated
++            // package. The GRE check could be expanded to check even more bytes
++            // unique to GRE
++			version = p.data[16] >> 4
++			if version == 4 || version == 6 {
++                // actually strip the GRE header
++				p.data = p.data[16:]
++                return
++			}
++        }
++
++        var etherType = uint16(p.data[14]) << 8 | uint16(p.data[15])
++
++        // check for the ARPHRD_IPGRE type (778), which is present in GRE over IP packets
++        if p.data[2] == 0x03 && p.data[3] == 0x0a {
++                // check if we actually have IPv4 (0x0800) or IPv6 (0x86DD) packet data
++                // following
++                if etherType == 0x0800 || etherType == 0x86DD {
++                        // strip the GRE header from the packet
++                        p.data = p.data[16:]
++                        return
++                 }
++         }
++	}
++}
+diff -rupN gopacket/pcap/pcap.go gopacket_patched/pcap/pcap.go
+--- gopacket/pcap/pcap.go	2014-08-19 18:36:40.000000000 +0200
++++ gopacket_patched/pcap/pcap.go	2014-08-19 19:20:17.446199754 +0200
+@@ -292,6 +293,10 @@ func (p *Handle) getNextBufPtrLocked(ci
+ 		int64(p.pkthdr.ts.tv_usec)*1000) // convert micros to nanos
+ 	ci.CaptureLength = int(p.pkthdr.caplen)
+ 	ci.Length = int(p.pkthdr.len)
++
++	// OSAG addon: add the direction to the metadata
++	ci.Inbound = uint8(p.pkthdr.inbound)
++
+ 	return nil
+ }

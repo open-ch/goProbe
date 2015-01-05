@@ -5,20 +5,19 @@
 // Interface for handling all interactions with a database or files. Data will be
 // written out from this point
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, July 2014
+// Written by Lennart Elsen and Fabian Kohn, June 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
 /////////////////////////////////////////////////////////////////////////////////
 /* This code has been developed by Open Systems AG
  *
- * goDB is free software; you can redistribute it and/or modify
+ * goProbe is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
- * goDB is distributed in the hope that it will be useful,
+ * goProbe is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.

@@ -6,8 +6,7 @@
 // approrpiate functions and exposing the API to C (which, in turn, can be used 
 // by Google Go).
 // 
-// Written by Lennart Elsen
-//        and Fabian  Kohn, July 2014 
+// Written by Lennart Elsen and Fabian Kohn, July 2014 
 // Copyright (c) 2014 Open Systems AG, Switzerland 
 // All Rights Reserved.
 //

@@ -5,8 +5,7 @@
 // Small wrapper to make available a dpi instance which can be globally used by
 // all methods within the goProbe packet
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, May 2014
+// Written by Lennart Elsen and Fabian Kohn, May 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
