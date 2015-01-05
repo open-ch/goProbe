@@ -1,2 +1,16 @@
 v1.04 els0r
     - Initial GitHub release
+
+v1.05 els0r
+    GOPROBE
+    - fixes of several memory leaks with regard to interface flapping
+    - switch to syslog entries via UDP packets
+    - improvements in the direction detection heuristic
+    - prevention from crashes when IP fragmentation is encountered
+    - restructuring of core goProbe code to allow for a more flexible handling of interface capture routines. Allows goProbe to capture on 200+ interfaces
+    - support for loading/reloading the configuration (w.r.t on which interfaces capturing is performed)
+    - upgrade of gopacket to version 1.1.9, go to 1.4 and libpcap to 1.5.3
+
+    GOQUERY
+    - support for time formats other than UNIX epoch
+    - list functionality to show from which interfaces flow data was stored

@@ -1,13 +1,12 @@
-/////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 //
 // GPCore.go
 //
-// Core process that interacts with all interfaces which are captured. Responsible 
-// for timing database write outs and logging information. The Main function is
-// located here.
+// Core process that interacts with all the other interfaces and forwards GPPackets
+// from one channel to another. Also responsible for timing database write outs and
+// logging information. The Main function is located here.
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, May 2014
+// Written by Lennart Elsen and Fabian Kohn, May 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
@@ -28,13 +27,11 @@
  * along with goProbe; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
-
 package main
 
 import (
     "syscall"
     "time"
-    "sync"
 
     // for error messages not passed through syslog
     "fmt"
@@ -45,44 +42,35 @@ import (
     "runtime"
     "runtime/debug"
 
+//    "runtime/pprof"
+
     // own packages
     "OSAG/goProbe"
     "OSAG/goDB"
 )
 
-// Fixed config parameters
+// Fixed configuration parameters ------------------------------------------------
 const DB_WRITE_INTERVAL        = 300
+const CFG_PATH          string = "/usr/local/goProbe/etc/goprobe.conf"
 const SnapLen           int32  = 90
 const PromiscMode       bool   = true
-const BpfFilterString   string = "not arp and not icmp and not icmp6 and not dst port 5551"
+const BpfFilterString   string = "not arp and not icmp and not icmp6 and not port 5551"
 const DBPath            string = "/usr/local/goProbe/data/db"
 const PcapStatsFilename string = "pcap_stats.csv"
 
-func writeToStatsFile(data string, pathToFile string) {
-    // open stats file for writing and write column descriptions in there
-    var (
-        err             error
-        statsFileHandle *os.File
-    )
-
-    if statsFileHandle, err = os.OpenFile(pathToFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644); err != nil {
-        goProbe.SysLog.Err("Opening file " + pathToFile + " failed: " + err.Error())
-    }
-
-    // header of csv file: "pkts_rcvd,iface,pkts_dropped,pkts_if_dropped"
-    if _, wrerr := statsFileHandle.WriteString(data); wrerr != nil {
-        goProbe.SysLog.Err("Writing data to " + pathToFile + " failed: " + err.Error())
-    }
-
-    // close the file
-    statsFileHandle.Close()
-}
-
-//--------------------------------------------------------------------------------
+// goProbe's main routine --------------------------------------------------------
 func main() {
-//--------------------------------------------------------------------------------
 
-    /// LOGGING SETUP ///
+    // CPU Profiling Calls
+//    runtime.SetBlockProfileRate(10000000) // PROFILING DEBUG
+//    f, proferr := os.Create("GPCore.prof")    // PROFILING DEBUG
+//    if proferr != nil {                       // PROFILING DEBUG
+//        fmt.Println("Profiling error: "+proferr.Error()) // PROFILING DEBUG
+//    } // PROFILING DEBUG
+//    pprof.StartCPUProfile(f)     // PROFILING DEBUG
+//    defer pprof.StopCPUProfile() // PROFILING DEBUG
+
+    /// LOGGING SETUP ------------------------------------------------------------
     // initialize logger
     if err := goProbe.InitGPLog(); err != nil {
         fmt.Fprintf(os.Stderr, "Failed to initialize Logger. Exiting!\n")
@@ -101,7 +89,7 @@ func main() {
         return
     }
 
-    /// CHANNEL VARIABLE SETUP ///
+    /// CHANNEL VARIABLE SETUP ---------------------------------------------------
     // channel for handling writes to the flow map and the database
     gpcThreadIsDoneWritingChan := make(chan bool, 1)
     isDoneWritingToDBChan := make(chan bool, 1)
@@ -111,25 +99,27 @@ func main() {
 
     // channel for handling SIGTERM, SIGINT from the OS
     sigChan := make(chan os.Signal, 1)
-    signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGUSR1, os.Interrupt)
+    signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGUSR1, syscall.SIGUSR2, os.Interrupt)
 
-    /// DB WRITER SETUP///
+    /// DB WRITER SETUP ----------------------------------------------------------
     toStorageWriter := goDB.NewDBStorageWrite(DBPath)
 
-    /// CAPTURE INTERFACE SETUP ///
+    /// CAPTURE ROUTINES MANAGER -------------------------------------------------
     // channel for handling termination signals from the individual
     // interfaces
     gpcThreadTerminatedChan := make(chan string, len(IfaceNames))
 
-    // map of all interfaces that should be captured
-    var gpcCaptureThreads map[string]*goProbe.GPCapture = make(map[string]*goProbe.GPCapture)
+    // create capture routine manager
+    capManager := goProbe.NewGPCaptureManager(IfaceNames,
+                                              SnapLen,
+                                              PromiscMode,
+                                              BpfFilterString,
+                                              gpcThreadTerminatedChan,
+                                              DBDataChan,
+                                              gpcThreadIsDoneWritingChan,
+                                              isDoneWritingToDBChan)
 
-    for i := 0; i < len(IfaceNames); i++ {
-        // assign new capture interface
-        gpcCaptureThreads[IfaceNames[i]] = goProbe.NewGPCapture(IfaceNames[i],
-            DBDataChan,
-            gpcThreadIsDoneWritingChan)
-    }
+    quitCapFailureMonitorChan := make(chan bool, 1)
 
     // initialize dpi library
     if dpierr := goProbe.InitDPI(); dpierr != nil {
@@ -137,160 +127,112 @@ func main() {
         return
     }
 
-    /// CAPTURING THREADS ///
+    // initiate capture routine spawning
+    capManager.MonitorFailures(quitCapFailureMonitorChan)
+    capManager.StartCapture(DBPath)
 
-    // create wait group which is used to block the signal handler until
-    // all capture threads have at least tried to start up
-    var ctWG, ifaceWG sync.WaitGroup
-    ctWG.Add(len(IfaceNames))
+    goProbe.SysLog.Debug("Waiting for user signals")
 
-    // call the capture functions for each interface
-    for _, gpcThread := range gpcCaptureThreads {
-        ifaceWG.Add(1)
-
-        // spawn the capturing thread
-        gpcThread.CaptureInterface(SnapLen,
-            PromiscMode,
-            BpfFilterString,
-            gpcThreadTerminatedChan, &ifaceWG)
-
-        ifaceWG.Wait()
-        ctWG.Done()
-
-        // wait some time to allow the previous capturing thread to fire up
-        time.Sleep(100 * time.Millisecond)
-    }
-
-    /// TICKER THAT INITIATES DB WRITING/GPC THREAD TERMINATION HANDLER ///
-    // timer routine that initiates the write out to the database
+    /// MAIN SELECT FOR WRITE OUT AND PROGRAM TERMINATION ------------------------
     ticker := time.NewTicker(time.Second * time.Duration(DB_WRITE_INTERVAL))
-    go func() {
-        for {
-            select {
-            case t := <-ticker.C:
-                goProbe.SysLog.Debug("Initiating flow data flush")
+    for {
+         select{
+         /// TICKER WHICH INITIATES DB WRITING ////
+         case t := <-ticker.C:
+            goProbe.SysLog.Debug("Initiating flow data flush")
 
-                // take the current timestamp and provide it to each capture thread in order
-                // to prepare data
-                timestamp := t.Unix()
+            // take the current timestamp and provide it to each capture thread in order
+            // to prepare data
+            timestamp := t.Unix()
 
-                // wait for data and write it out when received
-                toStorageWriter.WriteFlowsToDatabase(timestamp, DBDataChan, isDoneWritingToDBChan)
+            // call the data write out routine
+            var ifaces []string
+            for iface := range capManager.GetActive() {
+                ifaces = append(ifaces, iface)
+            }
+            capManager.WriteDataToDB(ifaces, timestamp,
+                                     DBPath + "/" + PcapStatsFilename,
+                                     toStorageWriter)
 
-                // get the data from the individual maps
-                statsString := ""
-                for _, gpcThread := range gpcCaptureThreads {
-                    gpcThread.SendWriteDBString(timestamp)
-                    <-gpcThreadIsDoneWritingChan // wait for completion of data creation before continuing
-                    statsString += gpcThread.GetPcapHandleStats(timestamp)
+            // recover unavailable interfaces
+            capManager.RecoverInactive()
+
+            // call the garbage collectors
+            runtime.GC()
+            debug.FreeOSMemory()
+
+        /// SIGNAL HANDLING ///
+        // read signal from signal channel
+        case s := <-sigChan:
+
+            // take the current timestamp and provide it to each capture thread in order
+            // to prepare data
+            timestamp := time.Now().Unix()
+
+            // if SIGUSER (10) is received, the program should write out a pcap stats report
+            // to the stats file, which can be handled by the goprobe.init script
+            if s == syscall.SIGUSR1 {
+
+                goProbe.SysLog.Info("Received SIGUSR1 signal: writing out pcap handle stats")
+
+                // get the stats data from the individual maps
+                if statsString, err := capManager.GetPcapStats(timestamp); err != nil {
+                    goProbe.SysLog.Warning(err.Error())
+                } else {
+                    // write pcap handle stats to file
+                    capManager.WriteToStatsFile(statsString, DBPath+"/"+PcapStatsFilename)
                 }
 
-                // signal that there will be no more data following on the channel
-                DBDataChan <- goDB.DBData{}
+            // reload was called
+            } else if s == syscall.SIGUSR2 {
+                goProbe.SysLog.Info("Received SIGUSR2 signal: updating configuration")
 
-                // block until the storage writer is done
-                <-isDoneWritingToDBChan
-
-                // write pcap handle stats to file
-                writeToStatsFile(statsString, DBPath+"/"+PcapStatsFilename)
-
-                // recover unavailable interfaces
-                for i := 0; i < len(IfaceNames); i++ {
-                    if _, ok := gpcCaptureThreads[IfaceNames[i]]; !ok {
-                        goProbe.SysLog.Warning("Interface " + IfaceNames[i] + " not up, trying to restart...")
-
-                        // (re-)assign new capture interface
-                        gpcCaptureThreads[IfaceNames[i]] = goProbe.NewGPCapture(IfaceNames[i],
-                            DBDataChan,
-                            gpcThreadIsDoneWritingChan)
-
-                        ifaceWG.Add(1)
-                        // start capturing on it
-                        gpcCaptureThreads[IfaceNames[i]].CaptureInterface(SnapLen,
-                            PromiscMode,
-                            BpfFilterString,
-                            gpcThreadTerminatedChan, &ifaceWG)
-
-                        ifaceWG.Wait()
-                        // wait some time to allow the previous capturing thread to fire up
-                        time.Sleep(100 * time.Millisecond)
-                    }
+                // call config parsing and capture routine stop/start
+                if err := capManager.UpdateRunning(CFG_PATH); err != nil {
+                    goProbe.SysLog.Err("config reload error: "+err.Error())
                 }
 
-                // call the garbage collectors
+                // call garbage collector to clean up old activity map
                 runtime.GC()
                 debug.FreeOSMemory()
 
-            case interfaceToKill := <-gpcThreadTerminatedChan:
-                goProbe.SysLog.Warning("Capture on interface " + interfaceToKill + " terminated. Deleting it from map")
-
-                // if something was received on the termination channel, delete the respective
-                // interface from the map of active interfaces
-                delete(gpcCaptureThreads, interfaceToKill)
-            }
-        }
-    }()
-
-    /// SIGNAL HANDLING ///
-
-    // wait for all capture threads to start
-    ctWG.Wait()
-    goProbe.SysLog.Debug("interface capture routines initiated. Accepting signals...")
-
-    for {
-        // read signal from signal channel
-        s := <-sigChan
-
-        // take the current timestamp and provide it to each capture thread in order
-        // to prepare data
-        timestamp := time.Now().Unix()
-
-        // if SIGUSER (10) is received, the program should write out a pcap stats report
-        // to the stats file, which can be handled by the goprobe.init script
-        if s == syscall.SIGUSR1 {
-
-            goProbe.SysLog.Info("Received SIGUSR1 signal: writing out pcap handle stats")
-
-            // get the stats data from the individual maps
-            statsString := ""
-            for _, gpcThread := range gpcCaptureThreads {
-                statsString += gpcThread.GetPcapHandleStats(timestamp)
-            }
-
-            // write pcap handle stats to file
-            writeToStatsFile(statsString, DBPath+"/"+PcapStatsFilename)
-
             // wait for a termination signal. If it is received, initiate a database flush
             // and terminate the program
-        } else if s == syscall.SIGTERM || s == os.Interrupt {
-            goProbe.SysLog.Info("Received SIGTERM/SIGINT signal: flushing out the last batch of flows")
+            } else if s == syscall.SIGTERM || s == os.Interrupt {
+                goProbe.SysLog.Info("Received SIGTERM/SIGINT signal: flushing out the last batch of flows")
 
-            // write out the data
-            toStorageWriter.WriteFlowsToDatabase(timestamp, DBDataChan, isDoneWritingToDBChan)
+                // call the data write out routine
+                var ifaces []string
+                for iface := range capManager.GetActive() {
+                    ifaces = append(ifaces, iface)
+                }
+                capManager.WriteDataToDB(ifaces, timestamp, DBPath + "/" + PcapStatsFilename, toStorageWriter)
 
-            // get the data from the individual flow maps
-            statsString := ""
-            for _, gpcThread := range gpcCaptureThreads {
-                gpcThread.SendWriteDBString(timestamp)
-                <-gpcThreadIsDoneWritingChan // wait for completion of data creation before continuing
-                statsString += gpcThread.GetPcapHandleStats(timestamp)
+                // terminate the capture routines
+                capManager.StopCapturing(ifaces)
+
+                // clean up 
+                goProbe.SysLog.Info("Freeing resources and exiting")
+
+                // explicitly call garbage collectors
+                runtime.GC()
+                debug.FreeOSMemory()
+
+                // stop monitoring capture failures
+                quitCapFailureMonitorChan <-true
+
+                // de-allocate the memory claimed by the dpi library
+                goProbe.DeleteDPI()
+
+                // close all channels
+                close(gpcThreadIsDoneWritingChan)
+                close(isDoneWritingToDBChan)
+                close(DBDataChan)
+                close(sigChan)
+                close(gpcThreadTerminatedChan)
+
+                return
             }
-
-            // signal that there will be no more data following on the channel
-            DBDataChan <- goDB.DBData{}
-
-            // receive on data chan to know that the storage writer function is done
-            <-isDoneWritingToDBChan
-
-            // write pcap handle stats to file
-            writeToStatsFile(statsString, DBPath+"/"+PcapStatsFilename)
-
-            break
         }
     }
-
-    // de-allocate the memory claimed by the dpi library
-    goProbe.DeleteDPI()
-
-    return
 }

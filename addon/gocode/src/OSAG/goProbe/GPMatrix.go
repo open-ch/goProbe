@@ -5,8 +5,7 @@
 // Datastructure storing the individual flows. Responsible for updating the Flow
 // information and writing it to the database
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, May 2014
+// Written by Lennart Elsen and Fabian Kohn, May 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
@@ -30,6 +29,9 @@
 package goProbe
 
 import (
+    "runtime/debug"
+    "fmt"
+
     "sync"
     "OSAG/goDB"
 )
@@ -59,7 +61,7 @@ func itod(i uint) string {
     var b [32]byte
     bp := len(b)
     for ; i > 0; i /= 10 {
-        bp--
+       bp--
         b[bp] = byte(i%10) + '0'
     }
 
@@ -88,7 +90,7 @@ type GPMatrix struct {
 
 // Constructor
 func NewGPMatrix() *GPMatrix {
-    return &GPMatrix{make(map[EPHash]*GPFlow)}
+    return &GPMatrix{flowMap: make(map[EPHash]*GPFlow)}
 }
 
 // This function is mainly there to read the GPPackets from the channel it
@@ -109,12 +111,19 @@ func (m *GPMatrix) addToFlow(packet *GPPacket) {
 /// PRIVATE METHODS ///
 // Write the data stored in the matrix to the database or to the specified file
 func (m *GPMatrix) prepareDataWrite(timestamp int64, DBDataChan chan goDB.DBData, doneWriting chan bool, iface string, newMatrix *GPMatrix, wg *sync.WaitGroup) {
+    defer func(){
+        if r := recover(); r != nil {
+            trace := string(debug.Stack())
+            fmt.Println(iface+": GPMatrix write fail:\n"+trace)
+        }
+    }()
+
     go func() {
 
         var dataAgg map[Key]*Val
 
         // check if there was even any data recorded for the given interfaces
-        if len(m.flowMap) > 0 {
+        if len(m.flowMap) > 0 && m.flowMap != nil {
             // aggregate source port information and fill in the flows worth
             // keeping
             dataAgg = m.preAggregateSourcePort(newMatrix)

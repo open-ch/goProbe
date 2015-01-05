@@ -5,8 +5,7 @@
 // Wrapper file for the classifier function used to determine the direction of a
 // packet with respect to its Endpoints
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, June 2014
+// Written by Lennart Elsen and Fabian Kohn, June 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
@@ -34,6 +33,31 @@ const (
 	DirectionRemains uint8 = 1
 	DirectionReverts uint8 = 2
 )
+
+/*
+const multicastRangeIPv4 [3]byte = [3]byte{244, 0, 0}
+const broadcastIPv4      [4]byte = [4]byte{255, 255, 255, 255}
+const ssdpAddressIPv4    [4]byte = [4]byte{239, 255, 255, 250}
+*/
+
+// slice storing frequently used destination ports which fall outside of the service
+// port range 1-1023. These are explicit exceptions to the direction heuristic below 
+var specialPorts [5]uint16 = [5]uint16{5222,  // XMPP, iMessage
+                                       5353,  // DNS
+                                       8080,  // Proxy
+                                       8612,  // Canon BJNP
+                                       17500} // Dropbox LanSync
+
+func IsSpecialPort(port uint16) bool {
+    special := false
+
+    // check if port matches any of the special ports 
+    for _, p := range specialPorts {
+        special = special || (p == port)
+    }
+
+    return special
+}
 
 // This function is responsible for running a variety of heuristics on the packet
 // in order to determine its direction. This classification is important since the
@@ -69,21 +93,6 @@ func ClassifyPacketDirection(packet *GPPacket) uint8 {
 	      }
 	*/
 
-    // handle TCP and UDP
-	if packet.endpoint.protocol == 6 || packet.endpoint.protocol == 17 {
-		// non-TCP-handshake packet encountered, but port information available
-
-		// according to RFC 6056, look for ephemeral ports in the range of 49152
-		// through 65535
-		if (dport < 1024 || dport == 8080 || dport == 5353 || dport == 17500 || dport == 8612 || dport == 5222) && sport > 20000 {
-			return DirectionRemains
-		}
-
-		if (sport < 1024 || sport == 8080 || sport == 5353 || sport == 17500 || sport == 8612 || sport == 5222) && dport > 20000 {
-			return DirectionReverts
-		}
-	}
-
     // handle multicast addresses
     if (packet.endpoint.dip[0] == 224 && packet.endpoint.dip[1] == 0) && (packet.endpoint.dip[2] == 0 || packet.endpoint.dip[2] == 1) {
         return DirectionRemains
@@ -93,6 +102,30 @@ func ClassifyPacketDirection(packet *GPPacket) uint8 {
     if (packet.endpoint.dip[0] == 255 && packet.endpoint.dip[1] == 255 && packet.endpoint.dip[2] == 255 && packet.endpoint.dip[3] == 255) {
         return DirectionRemains
     }
+
+    // handle TCP and UDP
+	if packet.endpoint.protocol == 6 || packet.endpoint.protocol == 17 {
+		// non-TCP-handshake packet encountered, but port information available
+
+        // check for DHCP messages
+        if dport == 67 && sport == 68 {
+            return DirectionRemains
+        }
+
+        if dport == 68 && sport == 67 {
+            return DirectionReverts
+        }
+
+		// according to RFC 6056, look for ephemeral ports in the range of 49152
+		// through 65535
+		if (dport < 1024 || IsSpecialPort(dport)) && sport > 20000 {
+			return DirectionRemains
+		}
+
+		if (sport < 1024 || IsSpecialPort(sport)) && dport > 20000 {
+			return DirectionReverts
+		}
+	}
 
 	/* disregarded until further notice
 	   if packet.ICMPtypeCode != 0xffff {

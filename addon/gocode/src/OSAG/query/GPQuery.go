@@ -2,22 +2,21 @@
 //
 // GPQuery.go
 //
-// Query front end for goDB
+// nquery replacement
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, July 2014
+// Written by Lennart Elsen and Fabian Kohn, July 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
 /////////////////////////////////////////////////////////////////////////////////
 /* This code has been developed by Open Systems AG
  *
- * goDB is free software; you can redistribute it and/or modify
+ * goProbe is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
- * goDB is distributed in the hope that it will be useful,
+ * goProbe is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
@@ -43,6 +42,7 @@ import (
     "strings"
     "text/tabwriter"
     "time"
+    "errors"
     //    "runtime/pprof"
 
     // database package for writing to and reading from the binary column store
@@ -50,6 +50,29 @@ import (
 )
 
 const MAX_PRINTED_ENTRIES int = 1000
+
+// Parse macros file to find out about any external ips --------------------------
+func getExternalIPs() []string {
+    var file *os.File
+    var err error
+
+    if file, err = os.Open("/etc/macros.conf"); err != nil {
+        return []string{}
+    }
+
+    // scan file line by line
+    scanner := bufio.NewScanner(file)
+    for scanner.Scan() {
+        splits := strings.Split(scanner.Text(), "=")
+        if splits[0] == "ip_LOCAL_EXT" {
+            return strings.Split(splits[1], ",")
+        }
+    }
+
+    return []string{}
+}
+
+// GOOGLE's utility functions for printing IPv4/6 addresses ----------------------
 // Convert i to hexadecimal string
 func itox(i uint, min int) string {
 
@@ -82,27 +105,7 @@ func itod(i uint) string {
     return string(b[bp:])
 }
 
-// parse macros file to find out about any external ips
-func getExternalIPs() []string {
-    var file *os.File
-    var err error
-
-    if file, err = os.Open("/etc/macros.conf"); err != nil {
-        return []string{}
-    }
-
-    // scan file line by line
-    scanner := bufio.NewScanner(file)
-    for scanner.Scan() {
-        splits := strings.Split(scanner.Text(), "=")
-        if splits[0] == "ip_LOCAL_EXT" {
-            return strings.Split(splits[1], ",")
-        }
-    }
-
-    return []string{}
-}
-
+/// END GOOGLE ///
 // convert the ip byte arrays to string. The formatting logic for IPv6
 // is directly copied over from the go IP package in order to save an
 // additional import just for string operations
@@ -169,7 +172,7 @@ func rawIpToString(ip []byte) string {
     }
 }
 
-// Helper routine to make numbers/bytes human readable
+// Helper routine to make numbers/bytes human readable ---------------------------
 func humanize(val int, div int) string {
     count := 0
     var val_flt float64 = float64(val)
@@ -192,6 +195,7 @@ func IPStringToBytes(ip string) []byte {
     var is_ipv4 bool = strings.Contains(ip, ".")
     var cond_bytes []byte
 
+
     ipaddr := net.ParseIP(ip)
     for _, i := range ipaddr {
         cond_bytes = append(cond_bytes, byte(i))
@@ -209,6 +213,7 @@ func IPStringToBytes(ip string) []byte {
     return cond_bytes
 }
 
+// Map sorting utility functions -------------------------------------------------
 func AppendIfMissing(slice []string, s string) []string {
     for _, ele := range slice {
         if ele == s {
@@ -260,10 +265,12 @@ func (s *entrySorter) Less(i, j int) bool {
     return s.by(&s.entries[i], &s.entries[j])
 }
 
-func ReadFlags(config *goDB.GeneralConf) {
+// Command line options parsing --------------------------------------------------
+func ReadFlags(config *goDB.GeneralConf) error {
     flag.StringVar(&config.Iface, "i", "", "Interface for which the query should be performed (e.g. eth0, t4_33760, ...)")
     flag.StringVar(&config.Conditions, "c", "", "Logical conditions for the query")
     flag.StringVar(&config.BaseDir, "d", "/usr/local/goProbe/data/db", "Path to database directory. By default, /usr/local/goProbe/data/db is used")
+    flag.BoolVar(&config.ListDB, "list", false, "lists on which interfaces data was captured and written to the DB")
     flag.StringVar(&config.Format, "e", "txt", "Output format: {txt|json|csv}")
     flag.BoolVar(&config.Help, "h", false, "Prints the help page")
     flag.BoolVar(&config.HelpAdmin, "help-admin", false, "Prints the advanced help page")
@@ -275,92 +282,122 @@ func ReadFlags(config *goDB.GeneralConf) {
     flag.BoolVar(&config.Incoming, "in", false, "Take into account incoming data only (received packets/bytes)")
     flag.BoolVar(&config.Outgoing, "out", false, "Take into account outgoing data only (sent packets/bytes)")
     flag.IntVar(&config.NumResults, "n", 10000, "Maximum number of final entries to show. Defaults to 95% of the overall data volume / number of packets (depending on the '-p' parameter)")
-    flag.Int64Var(&config.First, "f", 0, "Lower bound on flow timestamp")
-    flag.Int64Var(&config.Last, "l", 9999999999999999, "Upper bound on flow timestamp")
+    flag.StringVar(&config.First, "f", "0", "Lower bound on flow timestamp")
+    flag.StringVar(&config.Last, "l", "9999999999999999", "Upper bound on flow timestamp")
     flag.Parse()
 
+    if flag.NArg() > 1 {
+        return errors.New("Query type must be the last argument of the call")
+    }
+
     config.QueryType = (flag.Arg(0))
+
+    return nil
 }
 
+// Help printing -----------------------------------------------------------------
 func printHelpGenerator(external bool) func() {
     var helpString string
     if !external {
         helpString =
             `Usage:
 
-                goquery -i <interface> [-hparvx] [-in|-out] [-n <max_n>] [-e txt|csv|json] [-d <db-path>]
-                [-f <timestamp>] [-l <timestamp>] [-c <conditions>] [-s <column>] [-v verbosity] QUERY_TYPE
+    goquery -i <interface> [-hpax] [-in|-out] [-n <max_n>] [-e txt|csv|json] [-d <db-path>]
+    [-f <timestamp>] [-l <timestamp>] [-c <conditions>] [-s <column(s)>] QUERY_TYPE
 
-                Flow database query tool to extract flow statistics from the goDB database
-                created by goProbe. By default, output is written to STDOUT, sorted by overall
-                (incoming and outgoing) data volume in descending order.
+    Flow database query tool to extract flow statistics from the goDB database
+    created by goProbe. By default, output is written to STDOUT, sorted by overall
+    (incoming and outgoing) data volume in descending order.
 
-                QUERY_TYPE
-                Type of query to perform (top talkers or top applications):
-                    talk_src        top talkers by source IP (default)
-                    talk_dst        top talkers by destination IP
-                    talk_conv       top talkers by IP pairs ("conversation")
-                    apps_port       top applications by protocol:[port]
-                    apps_dpi        top applications by deep packet inspection (L7)
-                    agg_talk_port   aggregation of conversation and applications
+    QUERY_TYPE
+        Type of query to perform (top talkers or top applications):
+          talk_src        top talkers by source IP (default)
+          talk_dst        top talkers by destination IP
+          talk_conv       top talkers by IP pairs ("conversation")
+          apps_port       top applications by protocol:[port]
+          apps_dpi        top applications by deep packet inspection (L7)
+          agg_talk_port   aggregation of conversation and applications
 
-                    -h
-                        Display this help text.
+    -h
+        Display this help text.
 
-                        -help-admin
-                        Display advanced options for database maintenance.
+    -help-admin
+        Display advanced options for database maintenance.
 
-                        -n
-                        Maximum number of final entries to show. Defaults to 95% of the overall
-                        data volume / number of packets (depending on the '-p' parameter)
+    -list, --list
+        List all interfaces on which data was captured and written to the database
 
-                        -i
-                        Interface for which the query should be performed (e.g. eth0, t4_33760, ...)
+    -i
+        Interface for which the query should be performed (e.g. eth0, t4_33760, ...)
 
-                        -in
-                        Take into account incoming data only (received packets/bytes).
+    -n
+        Maximum number of final entries to show. Defaults to 95% of the overall
+        data volume / number of packets (depending on the '-p' parameter)
 
-                        -out
-                        Take into account outgoing data only (sent packets/bytes).
+    -in
+        Take into account incoming data only (received packets/bytes).
 
-                        -e
-                        Output format:
-                        txt           Output in plain text format (default)
-                        json          Output in JSON format
-                        csv           Output in comma-separated table format
+    -out
+        Take into account outgoing data only (sent packets/bytes).
 
-                        -d
-                        Path to database directory <db-path>. By default,
-                        /usr/local/goProbe/data/db is used.
+    -e
+        Output format:
+          txt           Output in plain text format (default)
+          json          Output in JSON format
+          csv           Output in comma-separated table format
 
-                        -f
-                        -l
-                        Lower / upper bound on flow timestamp. Allowed formats are:
-                        1357800683                             EPOCH
+    -d
+        Path to goDB database directory <db-path>. By default,
+        /usr/local/goProbe/data/db is used.
 
-                        -c
-                        Logical conditions for the query, e.g.
-                        "dport=22 AND sip=192.168.0.1 AND proto=17"
+    -f / -l
+        Lower / upper bound on flow timestamp. Allowed formats are:
+          1357800683                            EPOCH
+          2006-01-02 15:04:05 -0700 MST         GO DEFAULT FORMAT
+          Mon Jan _2 15:04:05 2006              ANSIC
+          Mon Jan _2 15:04:05 MST 2006          UNIX DATE
+          Mon Jan 02 15:04:05 -0700 2006        RUBY DATE
+          02 Jan 06 15:04 MST                   RFC822
+          02 Jan 06 15:04 -0700                 RFC822Z
+          Monday, 02-Jan-06 15:04:05 MST        RFC850
+          Mon, 02 Jan 2006 15:04:05 MST         RFC1123
+          Mon, 02 Jan 2006 15:04:05 -0700       RFC1123Z
+          2006-01-02T15:04:05Z07:00             RFC3339
+          2006-01-02T15:04:05.999999999Z07:00   RFC3339 NANO
 
-                        Currently, only the "AND" and "=" operators are supported. 
+          02.01.2006 15:04:05                   CUSTOM SHORT
+          02.01.2006 15:04                      CUSTOM SHORTER
+          02.01.06 15:04                        
+          2.1.06 15:04                          CUSTOM SHORTEST
 
-                        -p
-                        Sort results by accumulated packets instead of bytes.
+          -15d:04h:05m                          RELATIVE
 
-                        -s
-                        Sort results by given column name(s) (overrides -p option, if given).
-                        -s time,sip,dport
+        Relative time will be evaluated with respect to NOW. The call can
+        be varied to include any (integer) combination of days, hours and
+        minutes, e.g.
 
-                        -a
-                        Sort results in ascending instead of descending order.
+          -15d:04h:05m, -15d:5m, -15d, -5m, -4h, -4h:05m, etc.
 
-                        -x
-                        Mode for external calls, e.g. from portal. Reduces verbosity of error
-                        messages to customer friendly text and writes full error messages
-                        to message log instead.
+    -c
+        Logical conditions for the query, e.g.
+        "dport=22 AND sip=192.168.0.1 AND proto=17"
 
-                        -t
-                        Timeout for database query call (Default: 300s).
+        Currently, only the "AND" and "=" operators are supported.
+
+    -p
+        Sort results by accumulated packets instead of bytes.
+
+    -s
+        Sort results by given column name(s) (comma-separated list,
+        overrides -p option, if given).
+
+    -a
+        Sort results in ascending instead of descending order.
+
+    -x
+        Mode for external calls, e.g. from portal. Reduces verbosity of error
+        messages to customer friendly text and writes full error messages
+        to message log instead.
                         `
         return func() {
             fmt.Println(helpString)
@@ -379,15 +416,14 @@ func printAdvancedHelpGenerator(external bool) func() {
         advHelpString =
             `Advanced maintenance options (should not be used in interactive mode):
 
-                    -wipe
-                        Wipe all database entries from disk.
-                        Handle with utmost care, all changes are permanent and cannot be undone!
+    -wipe
+        Wipe all database entries from disk.
+        Handle with utmost care, all changes are permanent and cannot be undone!
 
-                    -clean <timestamp>
-                        Remove all database rows before given timestamp (retention time).
-                        Handle with utmost care, all changes are permanent and cannot be undone!
-                        Allowed formats are identical to -f/-l parameters.
-
+    -clean <timestamp>
+        Remove all database rows before given timestamp (retention time).
+        Handle with utmost care, all changes are permanent and cannot be undone!
+        Allowed formats are identical to -f/-l parameters.
                         `
         return func() {
             fmt.Println(advHelpString)
@@ -399,33 +435,97 @@ func printAdvancedHelpGenerator(external bool) func() {
     }
 }
 
-var TimeFormats []string = []string{"1995:01:24T09:08:17.1823213",
-    "1995-01-24T09:08:17.1823213",
-    "Wed, 16 Jun 94 07:29:35 CST",
-    "Thu, 13 Oct 94 10:13:13 -0700",
-    "Wed, 9 Nov 1994 09:50:32 -0500 (EST)",
-    "21 dec 17:05",
-    "21-dec 17:05",
-    "21/dec 17:05",
-    "21/dec/93 17:05",
-    "1999 10:02:18 GMT",
-    "16 Nov 94 22:28:20 PST"}
+// Utility variables and functions for time parsing ------------------------------
+var TimeFormats []string = []string{"2006-01-02 15:04:05 -0700 MST",
+      "Mon Jan _2 15:04:05 2006",
+      "Mon Jan _2 15:04:05 MST 2006",
+      "Mon Jan 02 15:04:05 -0700 2006",
+      "02 Jan 06 15:04 MST",
+      "02 Jan 06 15:04 -0700",
+      "Monday, 02-Jan-06 15:04:05 MST",
+      "Mon, 02 Jan 2006 15:04:05 MST",
+      "Mon, 02 Jan 2006 15:04:05 -0700",
+      "2006-01-02T15:04:05Z07:00",
+      "2006-01-02T15:04:05.999999999Z07:00",
+      "02.01.2006 15:04:05", // custom additions for MC
+      "02.01.2006 15:04",
+      "02.01.06 15:04",
+      "2.1.06 15:04"}
+
+// function returning a UNIX timestamp relative to the current time
+func parseRelativeTime(rtime string) (int64, error) {
+
+    rtime = rtime[1:]
+
+    var secBackwards int64 = 0
+
+    // iterate over different time chunks to get the days, hours and minutes
+    for _, chunk := range strings.Split(rtime, ":"){
+        var err error
+
+        if len(chunk) == 0 {
+            return 0, errors.New("incorrect relative time specification")
+        }
+
+        num := int64(0)
+
+        switch chunk[len(chunk)-1]{
+        case 'd':
+            if num, err = strconv.ParseInt(chunk[:len(chunk)-1], 10, 64); err != nil {
+                return 0, err
+            }
+            secBackwards += 86400*num
+        case 'h':
+            if num, err = strconv.ParseInt(chunk[:len(chunk)-1], 10, 64); err != nil {
+                return 0, err
+            }
+            secBackwards += 3600*num
+        case 'm':
+            if num, err = strconv.ParseInt(chunk[:len(chunk)-1], 10, 64); err != nil {
+                return 0, err
+            }
+            secBackwards += 60*num
+        default:
+            return 0, errors.New("incorrect relative time specification")
+        }
+    }
+
+    return (time.Now().Unix() - secBackwards), nil
+
+}
 
 func parseTimeArgument(timeString string) (int64, error) {
-    var err error
-    var t time.Time
+    var(
+        err  error
+        rerr error
+        t    time.Time
+        tRel int64
+    )
 
+    // check whether a relative timestamp was specified
+    if timeString[0] == '-' {
+        if tRel, rerr = parseRelativeTime(timeString); rerr == nil {
+            return tRel, rerr
+        }
+    }
+
+    // try to interpret string as unix timestamp
+    if i, er := strconv.ParseInt(timeString, 10, 64); er == nil {
+        return i, er
+    }
+
+    // then check other time formats
     for _, tFormat := range TimeFormats {
         t, err = time.Parse(tFormat, timeString)
         if err == nil {
             return t.Unix(), err
         }
-        fmt.Println(tFormat, t, err)
     }
 
-    return int64(0), err
+    return int64(0), errors.New("\n- "+rerr.Error()+"\n- "+err.Error())
 }
 
+// Database cleanup functions ----------------------------------------------------
 // completely removes all folders inside the base directory. Handle with care!
 func wipeDB(dbPath string) error {
     // Get list of files in directory
@@ -489,7 +589,7 @@ func cleanOldDBDirs(dbPath string, tOldest int64) error {
 
 }
 
-// Message handling
+// Message handling --------------------------------------------------------------
 func throwMsg(msg string, external bool, fmtSpec string) {
     customer_text := "An error occurred while retrieving the requested information"
     out_level := os.Stderr
@@ -526,9 +626,106 @@ func throwMsg(msg string, external bool, fmtSpec string) {
     }
 }
 
+// List interfaces for which data is available -----------------------------------
+// Data type used to store any general information about the database
+type DBInfo struct {
+    Size        float32
+    DaysCovered uint8
+}
+
+func listAvailableDBs(dbPath string, external bool) error {
+
+    // Get list of files in directory
+    var (
+        ifaceDirList []os.FileInfo
+        dirList      []os.FileInfo
+        fileList     []os.FileInfo
+        err          error
+        dbInfo       map[string]interface{} = make(map[string]interface{})
+    )
+
+    if ifaceDirList, err = ioutil.ReadDir(dbPath); err != nil {
+        return err
+    }
+
+    dbPathArr := strings.Split(dbPath, "/")
+    if dbPathArr[len(dbPathArr)-1] != "db" {
+        return errors.New("non-standard DB path specified")
+    }
+
+    wtxt := tabwriter.NewWriter(os.Stdout, 0, 4, 6, ' ', tabwriter.AlignRight)
+    totalDBSize := float32(0)
+
+    // check all the interface directories for obsolete timestamps
+    for _, iface := range ifaceDirList {
+        if iface.IsDir() && (iface.Name() != "./" || iface.Name() != "../") {
+            dayCount := uint8(0)
+            dirSize  := float32(0)
+
+            // count the directories in the interface DB folder
+            if dirList, err = ioutil.ReadDir(dbPath + "/" + iface.Name()); err != nil {
+                return err
+            }
+
+            for _, day := range dirList {
+                if day.IsDir() && (iface.Name() != "./" || iface.Name() != "../") {
+                    dayCount++
+                }
+                if fileList, err =  ioutil.ReadDir(dbPath + "/" + iface.Name() + "/" + day.Name()); err != nil {
+                    return err
+                }
+
+                // get the size of each of the .gpf files
+                for _, file := range fileList {
+                    if !file.IsDir(){
+                        dirSize += float32(file.Size())
+                    }
+                }
+            }
+
+            // store interface entry
+            dbInfo[iface.Name()] = DBInfo{dirSize/1024/1024, dayCount}
+            totalDBSize += dirSize/1024/1024
+        }
+    }
+
+    // output data in json format if function is called externally
+    if external {
+        var json_bytes []byte
+        var jerr       error
+
+        // add totals line to info struct
+        dbInfo["Total Size"] = totalDBSize
+
+        if json_bytes, jerr = json.Marshal(dbInfo); jerr != nil {
+            return jerr
+        }
+        fmt.Printf(string(json_bytes))
+    // otherwise print to stdout
+    } else {
+        fmt.Println("Available interfaces:")
+        fmt.Fprintln(wtxt, "\t\tDays\t")
+        fmt.Fprintln(wtxt, "Iface\tSize [MB]\tCovered\t")
+        fmt.Fprintln(wtxt, "-----\t---------\t-------\t")
+
+        for key, val := range dbInfo {
+            dbi := val.(DBInfo)
+            fmt.Fprintln(wtxt, key+"\t"+strconv.FormatFloat(float64(dbi.Size), 'f', 3, 32)+"\t"+strconv.Itoa(int(dbi.DaysCovered))+"\t")
+        }
+
+        fmt.Fprintln(wtxt, "\t\t\t")
+        fmt.Fprintln(wtxt, "Total\t"+strconv.FormatFloat(float64(totalDBSize), 'f', 3, 32)+"\t\t")
+        wtxt.Flush()
+        fmt.Println()
+    }
+
+    return err
+
+}
+
 //--------------------------------------------------------------------------------
 func main() {
-    //--------------------------------------------------------------------------------
+//--------------------------------------------------------------------------------
 
     // CPU Profiling Calls
     //runtime    runtime.SetBlockProfileRate(10000000) // PROFILING DEBUG
@@ -548,7 +745,12 @@ func main() {
 
     /// COMMAND LINE OPTIONS PARSING ///
     var queryConfig goDB.GeneralConf
-    ReadFlags(&queryConfig)
+    if parseErr := ReadFlags(&queryConfig); parseErr != nil {
+        // We have to assume here that the call was interactive, since we don't know the
+        // external / format options yet. We also can't throw the help yet.
+        throwMsg(parseErr.Error(), false, "txt")
+        return
+    }
 
     printHelp := printHelpGenerator(queryConfig.External)
     printAdvancedHelp := printAdvancedHelpGenerator(queryConfig.External)
@@ -564,9 +766,18 @@ func main() {
         return
     }
 
+    // check if list option was called
+    if queryConfig.ListDB {
+        if lserr := listAvailableDBs(queryConfig.BaseDir, queryConfig.External); lserr != nil {
+            throwMsg("Failed to retrieve list of available databases: "+lserr.Error(), queryConfig.External, queryConfig.Format)
+        }
+
+        // return in any case since --list is informational
+        return
+    }
+
     // check if data needs to be cleaned or wiped
     if queryConfig.WipeAdmin {
-
         if wiperr := wipeDB(queryConfig.BaseDir); wiperr != nil {
             throwMsg("Failed to completely remove database: "+wiperr.Error(), queryConfig.External, queryConfig.Format)
             return
@@ -597,7 +808,21 @@ func main() {
         return
     }
 
-    if (queryConfig.Last <= queryConfig.First) {
+    // parse time bound
+    var qcLast, qcFirst int64
+    var lerr            error
+    if qcLast, lerr = parseTimeArgument(queryConfig.Last); lerr != nil {
+        throwMsg("Invalid time format: "+lerr.Error(), queryConfig.External, queryConfig.Format)
+        printHelp()
+        return
+    }
+    if qcFirst, lerr = parseTimeArgument(queryConfig.First); lerr != nil {
+        throwMsg("Invalid time format: "+lerr.Error(), queryConfig.External, queryConfig.Format)
+        printHelp()
+        return
+    }
+
+    if (qcLast <= qcFirst) {
         throwMsg("Invalid time interval: the lower time bound cannot be greater than the upper time bound"+queryConfig.QueryType, queryConfig.External, queryConfig.Format)
         printHelp()
         return
@@ -697,7 +922,7 @@ func main() {
         return
     }
 
-    if err := workload.CreateWorkerJobs(queryConfig.First, queryConfig.Last); err != nil {
+    if err := workload.CreateWorkerJobs(qcFirst, qcLast); err != nil {
         throwMsg("Query returned no results", queryConfig.External, queryConfig.Format)
         return
     }

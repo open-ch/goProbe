@@ -2,23 +2,22 @@
 //
 // GPWorkload.go
 //
-// Main workload distribution module deciding  which files in the go database 
-// have to be written to or read from
+// Helper functions that decide which files in the go database have to be written
+// to or read from
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, July 2014
+// Written by Lennart Elsen and Fabian Kohn, July 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
 /////////////////////////////////////////////////////////////////////////////////
 /* This code has been developed by Open Systems AG
  *
- * goDB is free software; you can redistribute it and/or modify
+ * goProbe is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  *
- * goDB is distributed in the hope that it will be useful,
+ * goProbe is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
@@ -100,7 +99,7 @@ func (w *GPWorkload) WriteAttribute(attribute string, data []byte, curTstamp int
             // write block of data and return nil error
             errChan <- writer.WriteTimedBlock(curTstamp, data, compressionLevel)
 
-            // close the file when done writing
+            // close the file when done writing 
             writer.Close()
         } else {
             errChan <- err
@@ -200,14 +199,36 @@ func (w *GPWorkload) readBlocksAndEvaluate(worker DBWorker, query *Query) {
     attrFilePointers := make([]*GPFile, numAttr)
 
     // load the files holding the flow counter variables
-    br_file, _ = NewGPFile(w.dbPath + "/" + cur_dir + "/bytes_rcvd.gpf")
-    bs_file, _ = NewGPFile(w.dbPath + "/" + cur_dir + "/bytes_sent.gpf")
-    pr_file, _ = NewGPFile(w.dbPath + "/" + cur_dir + "/pkts_rcvd.gpf")
-    ps_file, _ = NewGPFile(w.dbPath + "/" + cur_dir + "/pkts_sent.gpf")
+    var filerr error
+    if br_file, filerr = NewGPFile(w.dbPath + "/" + cur_dir + "/bytes_rcvd.gpf"); filerr != nil {
+        SysLog.Err("File error: "+filerr.Error())
+        query.QuitChan <- true
+        return
+    }
+    if bs_file, filerr = NewGPFile(w.dbPath + "/" + cur_dir + "/bytes_sent.gpf"); filerr != nil {
+        SysLog.Err("File error: "+filerr.Error())
+        query.QuitChan <- true
+        return
+    }
+    if pr_file, filerr = NewGPFile(w.dbPath + "/" + cur_dir + "/pkts_rcvd.gpf"); filerr != nil {
+        SysLog.Err("File error: "+filerr.Error())
+        query.QuitChan <- true
+        return
+    }
+    if ps_file, filerr = NewGPFile(w.dbPath + "/" + cur_dir + "/pkts_sent.gpf"); filerr != nil {
+        SysLog.Err("File error: "+filerr.Error())
+        query.QuitChan <- true
+        return
+    }
 
     // conditionally load the files needed for querying
     for ind := range query.Attributes {
-        attrFilePointers[ind], _ = NewGPFile(w.dbPath + "/" + cur_dir + "/" + query.Attributes[ind].Name + ".gpf")
+        attrFilePointers[ind], filerr = NewGPFile(w.dbPath + "/" + cur_dir + "/" + query.Attributes[ind].Name + ".gpf")
+        if filerr != nil {
+            SysLog.Err("File error: "+filerr.Error())
+            query.QuitChan <- true
+            return
+        }
     }
 
     if condsAvailable {
@@ -217,7 +238,11 @@ func (w *GPWorkload) readBlocksAndEvaluate(worker DBWorker, query *Query) {
             }
 
             if !condIsQueryAttr[cnd] {
-                condFilePointers[cnd], _ = NewGPFile(w.dbPath + "/" + cur_dir + "/" + cond.Attribute + ".gpf")
+                if condFilePointers[cnd], filerr = NewGPFile(w.dbPath + "/" + cur_dir + "/" + cond.Attribute + ".gpf"); filerr != nil {
+                    SysLog.Err("File error: "+filerr.Error())
+                    query.QuitChan <- true
+                    return
+                }
             }
         }
     }
@@ -379,6 +404,16 @@ func (w *GPWorkload) readBlocksAndEvaluate(worker DBWorker, query *Query) {
         query.MapChan <- query.ResultMap
 
     }
+
+    // close the attribute files when done
+    for ind := range query.Attributes {
+        attrFilePointers[ind].Close()
+    }
+
+    br_file.Close()
+    bs_file.Close()
+    pr_file.Close()
+    ps_file.Close()
 
     // signal that the current worker is done
     query.QuitChan <- true

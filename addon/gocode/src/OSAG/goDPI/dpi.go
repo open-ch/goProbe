@@ -4,8 +4,7 @@
 //
 // Go interface to the C-Wrapper interfacing the libprotoident C++ API
 //
-// Written by Lennart Elsen
-//        and Fabian  Kohn, July 2014
+// Written by Lennart Elsen and Fabian Kohn, July 2014
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //

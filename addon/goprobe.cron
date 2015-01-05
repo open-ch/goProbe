@@ -1,2 +1,2 @@
 # Run goprobe database cleanup (retention time 30 days)
-3 3 * * *  root test -e /usr/local/goProbe/data/db && CURRENT_EPOCH=`date +\%s` && /usr/local/goProbe/shared/goquery -x -clean `expr $CURRENT_EPOCH - 2592000` > /dev/null 2>&1
+3 3 * * *  root RETENTION_TIME=2592000; test -e /usr/local/goProbe/data/db && CURRENT_EPOCH=`date +\%s` && /usr/local/goProbe/shared/goquery -x -clean $(( $CURRENT_EPOCH - $RETENTION_TIME )) > /dev/null 2>&1; test -e /usr/local/goProbe/data/db/pcap_stats.csv && /bin/awk -F, '{ if($1 >= ce - rt){ print $0 } }' ce=$CURRENT_EPOCH rt=$RETENTION_TIME < /usr/local/goProbe/data/db/pcap_stats.csv > /usr/local/goProbe/data/db/pcap_stats.csv.tmp && mv /usr/local/goProbe/data/db/pcap_stats.csv.tmp /usr/local/goProbe/data/db/pcap_stats.csv
