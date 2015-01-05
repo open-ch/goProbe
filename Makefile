@@ -124,7 +124,7 @@ compile:
 	## GO CODE COMPILATION ##
 	# first, compile libpcap and libprotoident because the go code depends on it
 	echo "*** compiling $(PCAP) ***"
-	cd $(PCAP); make -s > /dev/null; rm libpcap.a; ln -sf libpcap.so.$(PCAP_VERSION) libpcap.so
+	cd $(PCAP); make -s > /dev/null; rm libpcap.a; ln -sf libpcap.so.$(PCAP_VERSION) libpcap.so; ln -sf libpcap.so.$(PCAP_VERSION) lipbcap.so.1
 
 	echo "*** compiling lz4 ***"
 	cd addon/lz4; make -s > /dev/null 
