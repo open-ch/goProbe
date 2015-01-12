@@ -113,6 +113,19 @@ If you use `goConvert`, you need to make sure that the data which you are import
 ...
 ``` 
 You _must_ abide by this structure, otherwise the conversion will fail.
+
+Logging Facilities
+------------------
+
+Both goProbe and goDB write to the Syslog facility. However, the log output is passed to syslog via UDP packets to destination port 514. You will have to make sure that your syslog daemon supports logging via UDP. On most platforms uncommenting the following in `/etc/rsyslog.conf` should suffice:
+
+```
+$ModLoad imudp
+$UDPServerRun 514
+```
+
+Changes should take effect after rebooting the machine.
+
 Installation
 ------------
 
