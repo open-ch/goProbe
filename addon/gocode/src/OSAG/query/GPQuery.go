@@ -1109,7 +1109,7 @@ mapJoin:
                 } else {
                 elements = append(elements,
                     rawIpToString(map_entry.k.Sip[:]), rawIpToString(map_entry.k.Dip[:]),
-                    strconv.Itoa(int(uint16(map_entry.k.Dport[0])<<8|uint16(map_entry.k.Dport[1]))), goDB.GetIPProto(int(map_entry.k.Protocol)))
+                    int(uint16(map_entry.k.Dport[0])<<8|uint16(map_entry.k.Dport[1])), goDB.GetIPProto(int(map_entry.k.Protocol)))
                 }
             }
 
