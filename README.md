@@ -153,6 +153,9 @@ Changes should take effect after rebooting the machine.
 Installation
 ------------
 
+*Note*: the default directory for `goProbe` is `/opt/ntm/goProbe`. If you wish to change this, change the `PREFIX` variable in the `Makefile` to a destination of your choosing.
+
+
 Before running the installer, make sure that you have the following dependencies installed:
 * yacc
 * bison
