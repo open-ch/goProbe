@@ -14,3 +14,28 @@ v1.05 els0r
     GOQUERY
     - support for time formats other than UNIX epoch
     - list functionality to show from which interfaces flow data was stored
+
+v2.0 lorenzb,els0r
+    GOPROBE
+    - improve concurrent capture architecture for >5x faster startup and shutdown
+    - support for up to 1024 interfaces
+    - new configuration file format allows specifying PCAP buffer size and BPF filter for each interface
+    - configuration can be live-reloaded
+    - record meta-data about capture in meta.json/summary.json files
+    - document database format
+
+    GOQUERY
+    - '-list' target is blazing fast and prints more relevant information
+    - new output format shows incoming and outgoing traffic side by side
+    - significantly improved query performance
+    - allow use of negation in conditions
+    - new 'net' attribute allows querying 'dnet' and 'snet' simultaneously
+    - new 'host' attribute allows querying 'sip' and 'dip' simultaneously
+    - 'src' is an alias for 'sip' and 'dst' is an alias for 'dip'
+    - Influx DB output format (use '-e influxdb')
+    - support for name resolution in conditions
+    - support for reverse DNS for output IPs
+    - query multiple interfaces by giving commma separated list of interfaces to -i
+    - query all interfaces for which there is data by specifying '-i ANY'
+    - add unit and system (i.e. output consistency) tests
+    - extensive bash completion with support for condition grammar, interface names, query types, ...

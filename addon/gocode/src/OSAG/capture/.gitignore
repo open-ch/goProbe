@@ -3,4 +3,5 @@
 *.prof
 *.mprof
 GPCore
-*goProbe
+*goProbe*
+capture

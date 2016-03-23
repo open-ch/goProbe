@@ -32,17 +32,17 @@ Available flow counters are:
 
 * Bytes sent and received
 * Packet sent and received
-   
+
 In summary: *a goProbe-flow is not a NetFlow-flow*.
 
 The flow data is written out to a custom colum store called `goDB`, which was specifically designed to accomodate goProbe's data. Each of the above attributes is stored in a column file
 
 ### Usage
 
-Capturing is performed concurrently by goProbe on multiple interfaces which are specified as arguments to the program, which is started as follows (as `root`):
+Capturing is performed concurrently by goProbe on multiple interfaces. goProbe is started as follows (either as `root` or as non-root with capability `CAP_NET_RAW`):
 
 ```
-/usr/local/goProbe/bin/goProbe <iface 1> <iface 2> ... <iface n>
+/opt/ntm/goProbe/bin/goProbe -config <path to configuration file>
 ```
 The capturing probe can be run as a daemon via
 
@@ -50,9 +50,30 @@ The capturing probe can be run as a daemon via
 /etc/init.d/goprobe.init {start|stop|status|restart|reload|force-reload}
 ```
 
-By default, the interface `eth0` is specified. If you want to perform capturing on other interfaces, change the respective line in `goprobe.init` (the variable `DAEMON_ARGS` stores the interfaces).
+### Configuration
 
-__Update:__ version 1.05 supports the interface specification via a configuration file which should be saved as `/usr/local/goProbe/etc/goprobe.conf` and include a space-delimited list of interfaces on which capturing should be performed. In order for the changes to take effect the `reload` target should be used.
+You must configure goProbe. By default, the relevant configuration file resides in
+`/opt/ntm/goProbe/etc/goprobe.conf`.
+The configuration is stored as JSON and looks like this:
+```
+{
+  "db_path" : "/path/to/database",
+  "interfaces" : { // configure each interface we want to listen on
+    "eth0" : {
+      "bpf_filter" : "not arp and not icmp", // bpf filter string like for tcpdump
+      "buf_size" : 2097152,                  // pcap buffer size
+      "promisc" : false                      // enable promiscuous mode
+    },
+    "eth1" : {
+      "bpf_filter" : "not arp and not icmp",
+      "buf_size" : 1048576,
+      "promisc" : true
+    }  
+  }
+}
+```
+
+An example configuration file is created during installation at `/opt/ntm/goProbe/etc/goprobe.conf.example`.
 
 goDB
 --------------------------
@@ -73,32 +94,35 @@ goQuery
 
 ### Usage
 
-For a comprehensive help on how to use goQuery type `/usr/local/goProbe/bin/goQuery -h`
+For a comprehensive help on how to use goQuery type `/opt/ntm/goProbe/bin/goQuery -h`
 
 Example Output
 ------
 
 ```
-root@analyzer# /usr/local/goProbe/bin/goQuery -i eth0 -n 10 -c proto=TCP talk_conv
-Your query: talk_conv
-Conditions: proto=TCP
-Sort by:    accumulated data volume (sent and received)
-Interface:  eth0
-Query produced 779 hits and took 33.66236ms 
+# goquery -i eth0 -c 'dport = 443' -n 10 sip,dip
 
-                                  sip                   dip    packets       %   data vol.       %
-                       215.142.239.52        215.142.238.87    46.13 M   58.33    28.92 GB   89.17
-                       215.142.239.52       215.142.226.100    17.74 M   22.43     1.46 GB    4.50
-                       215.142.239.52       215.142.238.100    14.08 M   17.80     1.16 GB    3.57
-                       215.142.239.52       215.142.226.131   320.68 k    0.41   182.69 MB    0.55
-     fd03:ca0:7:c08:a0ae:118:867:d7e3   fd03:ca0:8:c0c::165    98.98 k    0.13   173.35 MB    0.52
-                       215.142.239.52       215.142.238.167   266.83 k    0.34   139.72 MB    0.42
-                       215.142.239.52        215.142.228.16    23.89 k    0.03   124.34 MB    0.37
-    fd03:ca0:7:c08:d910:9c63:f26f:3d2   fd03:ca0:8:c0c::165    80.99 k    0.10   119.30 MB    0.36
-   fd03:ca0:7:c08:28d4:b3ee:c16c:9ba4   fd03:ca0:8:c0c::165    49.06 k    0.06    72.62 MB    0.22
-   fd03:ca0:7:c08:4c6e:86bb:aec1:1072   fd03:ca0:8:c0c::165    15.91 k    0.02    23.83 MB    0.07
+                                   packets   packets             bytes      bytes
+             sip             dip        in       out      %         in        out      %
+  125.167.76.152  237.147.182.13  308.75 k  576.81 k  66.95   17.71 MB  805.53 MB  64.33
+  121.18.119.116  125.167.76.152  149.81 k   24.00 k  13.14  198.06 MB    9.64 MB  16.23
+  125.167.76.152  121.18.119.116  116.20 k   27.16 k  10.84  151.00 MB   14.18 MB  12.91
+  125.167.76.152  121.18.250.176   15.29 k   22.14 k   2.83   21.22 MB   18.26 MB   3.09
+  125.167.76.152   51.143.39.255    3.77 k    2.51 k   0.47    5.55 MB  271.98 kB   0.45
+  125.167.76.152   55.135.93.254    1.23 k    1.84 k   0.23    3.06 MB  197.34 kB   0.25
+  125.167.76.152  233.41.242.235  813.00      1.15 k   0.15    2.25 MB  143.61 kB   0.19
+  125.167.76.152  190.14.221.249  503.00    764.00     0.10    1.55 MB  120.58 kB   0.13
+  125.167.76.152   11.26.172.240    2.13 k    1.52 k   0.28    1.40 MB  232.91 kB   0.13
+  125.167.76.152  55.135.212.216  571.00    806.00     0.10    1.41 MB  133.44 kB   0.12
+                                       ...       ...               ...        ...
+                                  630.68 k  692.11 k         424.39 MB  855.27 MB
 
-Overall packets: 79.07 M , Overall data volume: 32.44 GB
+         Totals:                              1.32 M                      1.25 GB
+
+Timespan / Interface : [2016-02-25 19:29:35, 2016-02-26 07:44:35] / eth0
+Sorted by            : accumulated data volume (sent and received)
+Query stats          : 268.00   hits in 17ms
+Conditions:          : dport = 443
 ```
 
 ### Converting data
@@ -111,7 +135,7 @@ If you use `goConvert`, you need to make sure that the data which you are import
 40,72,172.23.34.171,8080,158,1,1,6,10.11.72.28,1392997558
 40,72,172.23.34.171,49362,158,1,1,6,10.11.72.28,1392999058
 ...
-``` 
+```
 You _must_ abide by this structure, otherwise the conversion will fail.
 
 Logging Facilities
@@ -145,8 +169,10 @@ Above command runs the following targets:
 
 * `make clean`: removes all dependencies and compiled binaries
 * `make configure`: downloads the dependencies, configures them and applies patches (if necessary)
-* `make compile`: compiles dependencies, goProbe and goQuery 
-* `make install`: set up package as a binary tree. The binaries and used libraries are placed in `/usr/local/goProbe` per default. The init script can be found under `/etc/init.d/goprobe.init`. It is also possible to install a cronjob used to clean up outdated database entries. It is not installed by default. Uncomment the line in the Makefile if you need this feature. The cronjob can be found in `/etc/cron.d/goprobe.cron`
+* `make compile`: compiles dependencies, goProbe and goQuery
+* `make install`: set up package as a binary tree. The binaries and used libraries are placed in `/opt/ntm/goProbe` per default. The init script can be found under `/etc/init.d/goprobe.init`. It is also possible to install a cronjob used to clean up outdated database entries. It is not installed by default. Uncomment the line in the Makefile if you need this feature. The cronjob can be found in `/etc/cron.d/goprobe.cron`
+* `make deploy`: syncs the binary tree to the root directory. *Note:* this is only a good idea if you want to run goProbe on the system where you compiled it.
+* `make package`: creates a tarball for deployment on another system.
 
 By default, `goConvert` is not compiled. If you wish to do so, add the following line to the `install` target in the Makefile:
 
@@ -155,19 +181,43 @@ go build -a -o goConvert $(PWD)/addon/gocode/src/OSAG/convert/DBConvert.go
 ```
 The binary will reside in the directory specified in the above command.
 
+### Bash autocompletion
+
+goQuery has extensive support for bash autocompletion. To enable autocompletion,
+you need to tell bash that it should use the `goquery_completion` program for
+completing `goquery` commands.
+How to do this depends on your distribution.
+On Debian derivatives, we suggest creating a file `goquery` in `/etc/bash_completion.d` with the following contents:
+```
+_goquery() {
+    case "$3" in
+        -d) # the -d flag specifies the database directory.
+            # we rely on bash's builtin directory completion.
+            COMPREPLY=( $( compgen -d -- "$2" ) )
+        ;;
+
+        *)
+            if [ -x /opt/ntm/goProbe/shared/goquery_completion ]; then
+                mapfile -t COMPREPLY < <( /opt/ntm/goProbe/shared/goquery_completion bash "${COMP_POINT}" "${COMP_LINE}" )
+            fi
+        ;;
+    esac
+}
+```
+
 ### Supported Operating Systems
 
 goProbe is currently set up to run on Linux based systems. Tested versions include:
 
-* Ubuntu 14.04
-* Debian 7
-
-Support for Mac OS X will follow eventually.
+* Ubuntu 14.04/15.04
+* Debian 7/8
 
 Authors & Contributors
 ----------------------
 
-Lennart Elsen and Fabian Kohn, Open Systems AG
+* Lennart Elsen, Open Systems AG
+* Fabian Kohn, Open Systems AG
+* Lorenz Breidenbach, Open Systems AG
 
 This software was developed at [Open Systems AG](https://www.open.ch/) in close collaboration with the [Distributed Computing Group](http://www.disco.ethz.ch/) at the [Swiss Federal Institute of Technology](https://www.ethz.ch/en.html).
 

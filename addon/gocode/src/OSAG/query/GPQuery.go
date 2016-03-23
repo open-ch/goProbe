@@ -4,250 +4,94 @@
 //
 // nquery replacement
 //
-// Written by Lennart Elsen and Fabian Kohn, July 2014
+// Written by Fabian Kohn   fko@open.ch and
+//            Lennart Elsen lel@open.ch and
+//            Lorenz Breidenbach lob@open.ch, September 2015
 // Copyright (c) 2014 Open Systems AG, Switzerland
 // All Rights Reserved.
 //
 /////////////////////////////////////////////////////////////////////////////////
-/* This code has been developed by Open Systems AG
- *
- * goProbe is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * goProbe is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with goProbe; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-*/
+
 package main
 
 import (
     "bufio"
-    "encoding/csv"
     "encoding/json"
+    "errors"
     "flag"
     "fmt"
     "io/ioutil"
-    "net"
     "os"
     "runtime"
+    "runtime/debug"
     "sort"
     "strconv"
     "strings"
-    "text/tabwriter"
     "time"
-    "errors"
     //    "runtime/pprof"
 
-    // database package for writing to and reading from the binary column store
     "OSAG/goDB"
+    "OSAG/version"
 )
 
-const MAX_PRINTED_ENTRIES int = 1000
+const (
+    // Variables for manual garbage collection calls
+    GOGCINTERVAL     = 5 * time.Second
+    GOGCLIMIT        = 6291456 // Limit for GC call, in bytes
+    MEMCHECKINTERVAL = 1 * time.Second
+    // Default value for -mem flag
+    MAXMEMPERCENTDEFAULT = 60
 
-// Parse macros file to find out about any external ips --------------------------
-func getExternalIPs() []string {
-    var file *os.File
-    var err error
+    ERROR_NORESULTS = "Query returned no results"
+)
 
-    if file, err = os.Open("/etc/macros.conf"); err != nil {
-        return []string{}
-    }
+// Direction indicates the counters of which flow direction we should print.
+type Direction int
 
-    // scan file line by line
-    scanner := bufio.NewScanner(file)
-    for scanner.Scan() {
-        splits := strings.Split(scanner.Text(), "=")
-        if splits[0] == "ip_LOCAL_EXT" {
-            return strings.Split(splits[1], ",")
-        }
-    }
+const (
+    DIRECTION_SUM  Direction = iota // sum of inbound and outbound counters
+    DIRECTION_IN                    // inbound counters
+    DIRECTION_OUT                   // outbound counters
+    DIRECTION_BOTH                  // inbound and outbound counters
+)
 
-    return []string{}
-}
+// SortOrder indicates by what the entries are sorted.
+type SortOrder int
 
-// GOOGLE's utility functions for printing IPv4/6 addresses ----------------------
-// Convert i to hexadecimal string
-func itox(i uint, min int) string {
+const (
+    SORT_PACKETS SortOrder = iota
+    SORT_TRAFFIC
+    SORT_TIME
+)
 
-    // Assemble hexadecimal in reverse order.
-    var b [32]byte
-    bp := len(b)
-    for ; i > 0 || min > 0; i /= 16 {
-        bp--
-        b[bp] = "0123456789abcdef"[byte(i%16)]
-        min--
-    }
-
-    return string(b[bp:])
-}
-
-// Convert i to decimal string.
-func itod(i uint) string {
-    if i == 0 {
-        return "0"
-    }
-
-    // Assemble decimal in reverse order.
-    var b [32]byte
-    bp := len(b)
-    for ; i > 0; i /= 10 {
-        bp--
-        b[bp] = byte(i%10) + '0'
-    }
-
-    return string(b[bp:])
-}
-
-/// END GOOGLE ///
-// convert the ip byte arrays to string. The formatting logic for IPv6
-// is directly copied over from the go IP package in order to save an
-// additional import just for string operations
-func rawIpToString(ip []byte) string {
-    var (
-        numZeros uint8 = 0
-        iplen    int   = len(ip)
-    )
-
-    // count zeros in order to determine whether the address
-    // is IPv4 or IPv6
-    for i := 4; i < iplen; i++ {
-        if (ip[i] & 0xFF) == 0x00 {
-            numZeros++
-        }
-    }
-
-    // construct ipv4 string
-    if numZeros == 12 {
-        return itod(uint(ip[0])) + "." +
-            itod(uint(ip[1])) + "." +
-            itod(uint(ip[2])) + "." +
-            itod(uint(ip[3]))
-    } else {
-        /// START OF GOOGLE CODE SNIPPET ///
-        p := ip
-
-        // Find longest run of zeros.
-        e0 := -1
-        e1 := -1
-        for i := 0; i < iplen; i += 2 {
-            j := i
-            for j < iplen && p[j] == 0 && p[j+1] == 0 {
-                j += 2
-            }
-            if j > i && j-i > e1-e0 {
-                e0 = i
-                e1 = j
-            }
-        }
-
-        // The symbol "::" MUST NOT be used to shorten just one 16 bit 0 field.
-        if e1-e0 <= 2 {
-            e0 = -1
-            e1 = -1
-        }
-
-        // Print with possible :: in place of run of zeros
-        var s string
-        for i := 0; i < iplen; i += 2 {
-            if i == e0 {
-                s += "::"
-                i = e1
-                if i >= iplen {
-                    break
-                }
-            } else if i > 0 {
-                s += ":"
-            }
-            s += itox((uint(p[i])<<8)|uint(p[i+1]), 1)
-
-        }
-        return s
-    }
-}
-
-// Helper routine to make numbers/bytes human readable ---------------------------
-func humanize(val int, div int) string {
-    count := 0
-    var val_flt float64 = float64(val)
-
-    units := map[int][]string{
-        1024: []string{" B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"},
-        1000: []string{" ", "k", "M", "G", "T", "P", "E", "Z", "Y"},
-    }
-
-    for val > div {
-        val /= div
-        val_flt /= float64(div)
-        count++
-    }
-
-    return fmt.Sprintf("%.2f %s", val_flt, units[div][count])
-}
-
-func IPStringToBytes(ip string) []byte {
-    var is_ipv4 bool = strings.Contains(ip, ".")
-    var cond_bytes []byte
-
-
-    ipaddr := net.ParseIP(ip)
-    for _, i := range ipaddr {
-        cond_bytes = append(cond_bytes, byte(i))
-    }
-
-    // reorder the array if it is ipv4 and pad with  zeros
-    if is_ipv4 {
-        cond_bytes[0], cond_bytes[1], cond_bytes[2], cond_bytes[3] = ipaddr[12], ipaddr[13], ipaddr[14], ipaddr[15]
-
-        for i := 4; i < 16; i++ {
-            cond_bytes[i] = 0x00
-        }
-    }
-
-    return cond_bytes
-}
-
-// Map sorting utility functions -------------------------------------------------
-func AppendIfMissing(slice []string, s string) []string {
-    for _, ele := range slice {
-        if ele == s {
-            return slice
-        }
-    }
-    return append(slice, s)
+// convenience wrapper around the summed counters
+type Counts struct {
+    PktsRcvd, PktsSent   uint64
+    BytesRcvd, BytesSent uint64
 }
 
 // For the sorting we refer to closures to be able so sort by whatever value
 // struct field we want
 type Entry struct {
-    k  goDB.Key
-    v  goDB.Val
-    nB uint64
-    nP uint64
+    k        goDB.ExtraKey
+    nBr, nBs uint64
+    nPr, nPs uint64
 }
 
-// By is the type of a "less" function that defines the ordering of its Planet arguments.
-type By func(e1, e2 *Entry) bool
+type by func(e1, e2 *Entry) bool
 
-// Sort is a method on the function type, By, that sorts the argument slice according to the function
-func (by By) Sort(entries []Entry) {
-    es := &entrySorter{
-        entries: entries,
-        by:      by, // closure for sort order defintion
-    }
-    sort.Sort(es)
-}
-
-// planetSorter joins a By function and a slice of Planets to be sorted.
 type entrySorter struct {
     entries []Entry
-    by      func(e1, e2 *Entry) bool // closure for Less method
+    less    func(e1, e2 *Entry) bool
+}
+
+// Sort is a method on the function type, By, that sorts the argument slice according to the function
+func (b by) Sort(entries []Entry) {
+    es := &entrySorter{
+        entries: entries,
+        less:    b,  // closure for sort order defintion
+    }
+    sort.Sort(es)
 }
 
 // Len is part of sort.Interface.
@@ -262,267 +106,197 @@ func (s *entrySorter) Swap(i, j int) {
 
 // Less is part of sort.Interface. It is implemented by calling the "by" closure in the sorter.
 func (s *entrySorter) Less(i, j int) bool {
-    return s.by(&s.entries[i], &s.entries[j])
+    return s.less(&s.entries[i], &s.entries[j])
+}
+
+func By(sort SortOrder, direction Direction, ascending bool) by {
+    switch sort {
+    case SORT_PACKETS:
+        switch direction {
+        case DIRECTION_BOTH, DIRECTION_SUM:
+            if ascending {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nPs+e1.nPr < e2.nPs+e2.nPr
+                }
+            } else {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nPs+e1.nPr > e2.nPs+e2.nPr
+                }
+            }
+        case DIRECTION_IN:
+            if ascending {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nPr < e2.nPr
+                }
+            } else {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nPr > e2.nPr
+                }
+            }
+        case DIRECTION_OUT:
+            if ascending {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nPs < e2.nPs
+                }
+            } else {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nPs > e2.nPs
+                }
+            }
+        }
+    case SORT_TRAFFIC:
+        switch direction {
+        case DIRECTION_BOTH, DIRECTION_SUM:
+            if ascending {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nBs+e1.nBr < e2.nBs+e2.nBr
+                }
+            } else {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nBs+e1.nBr > e2.nBs+e2.nBr
+                }
+            }
+        case DIRECTION_IN:
+            if ascending {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nBr < e2.nBr
+                }
+            } else {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nBr > e2.nBr
+                }
+            }
+        case DIRECTION_OUT:
+            if ascending {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nBs < e2.nBs
+                }
+            } else {
+                return func(e1, e2 *Entry) bool {
+                    return e1.nBs > e2.nBs
+                }
+            }
+        }
+    case SORT_TIME:
+        if ascending {
+            return func(e1, e2 *Entry) bool {
+                return e1.k.Time < e2.k.Time
+            }
+        } else {
+            return func(e1, e2 *Entry) bool {
+                return e1.k.Time > e2.k.Time
+            }
+        }
+    }
+
+    panic("Failed to generate Less func for sorting entries")
+}
+
+func getPhysMem() (float64, error) {
+    var memFile *os.File
+    var ferr error
+    if memFile, ferr = os.OpenFile("/proc/meminfo", os.O_RDONLY, 0444); ferr != nil {
+        return 0.0, errors.New("Unable to open /proc/meminfo: " + ferr.Error())
+    }
+
+    physMem := 0.0
+    memInfoScanner := bufio.NewScanner(memFile)
+    for memInfoScanner.Scan() {
+        if strings.Contains(memInfoScanner.Text(), "MemTotal") {
+            memTokens := strings.Split(memInfoScanner.Text(), " ")
+            physMem, _ = strconv.ParseFloat(memTokens[len(memTokens)-2], 64)
+        }
+    }
+
+    if physMem < 0.1 {
+        return 0.0, errors.New("Unable to obtain amount of physical memory from /proc/meminfo")
+    }
+
+    if ferr = memFile.Close(); ferr != nil {
+        return 0.0, errors.New("Unable to close /proc/meminfo after reading: " + ferr.Error())
+    }
+
+    return physMem, nil
 }
 
 // Command line options parsing --------------------------------------------------
-func ReadFlags(config *goDB.GeneralConf) error {
-    flag.StringVar(&config.Iface, "i", "", "Interface for which the query should be performed (e.g. eth0, t4_33760, ...)")
-    flag.StringVar(&config.Conditions, "c", "", "Logical conditions for the query")
-    flag.StringVar(&config.BaseDir, "d", "/usr/local/goProbe/data/db", "Path to database directory. By default, /usr/local/goProbe/data/db is used")
-    flag.BoolVar(&config.ListDB, "list", false, "lists on which interfaces data was captured and written to the DB")
-    flag.StringVar(&config.Format, "e", "txt", "Output format: {txt|json|csv}")
-    flag.BoolVar(&config.Help, "h", false, "Prints the help page")
-    flag.BoolVar(&config.HelpAdmin, "help-admin", false, "Prints the advanced help page")
-    flag.BoolVar(&config.WipeAdmin, "wipe", false, "wipes the entire database")
-    flag.Int64Var(&config.CleanAdmin, "clean", 0, "cleans all entries before indicated timestamp")
-    flag.BoolVar(&config.External, "x", false, "Mode for external calls, e.g. from portal")
-    flag.BoolVar(&config.Sort, "p", false, "Sort results by accumulated packets instead of bytes")
-    flag.BoolVar(&config.SortAscending, "a", false, "Sort results in ascending order")
-    flag.BoolVar(&config.Incoming, "in", false, "Take into account incoming data only (received packets/bytes)")
-    flag.BoolVar(&config.Outgoing, "out", false, "Take into account outgoing data only (sent packets/bytes)")
-    flag.IntVar(&config.NumResults, "n", 10000, "Maximum number of final entries to show. Defaults to 95% of the overall data volume / number of packets (depending on the '-p' parameter)")
-    flag.StringVar(&config.First, "f", "0", "Lower bound on flow timestamp")
-    flag.StringVar(&config.Last, "l", "9999999999999999", "Upper bound on flow timestamp")
-    flag.Parse()
+func ReadFlags(config *Config) error {
 
-    if flag.NArg() > 1 {
-        return errors.New("Query type must be the last argument of the call")
+    flagSet := flag.NewFlagSet("goquery", flag.ContinueOnError)
+    flagSet.Usage = func() { return }
+    flag.ErrHelp = nil
+
+    // Warning: The usage texts provided here are never printed.
+    // All help that is shown to the user resides in goDB/DBHelp.go
+    flagSet.StringVar(&config.Ifaces, "i", "", "Interfaces for which the query should be performed (e.g. 'eth0', 'eth0,t4_33760', 'ANY', ...)")
+    flagSet.StringVar(&config.Conditions, "c", "", "Logical conditions for the query")
+    flagSet.StringVar(&config.BaseDir, "d", "", "Path to database directory. By default the DB from the goProbe config is used")
+    flagSet.BoolVar(&config.ListDB, "list", false, "lists on which interfaces data was captured and written to the DB")
+    flagSet.StringVar(&config.Format, "e", "txt", "Output format: {txt|json|csv|influxdb}")
+    flagSet.BoolVar(&config.Help, "h", false, "Prints the help page")
+    flagSet.BoolVar(&config.Help, "help", false, "Prints the help page")
+    flagSet.BoolVar(&config.HelpAdmin, "help-admin", false, "Prints the advanced help page")
+    flagSet.BoolVar(&config.Version, "version", false, "Print version information and exit")
+    flagSet.BoolVar(&config.WipeAdmin, "wipe", false, "wipes the entire database")
+    flagSet.Int64Var(&config.CleanAdmin, "clean", 0, "cleans all entries before indicated timestamp")
+    flagSet.BoolVar(&config.External, "x", false, "Mode for external calls, e.g. from portal")
+    flagSet.StringVar(&config.Sort, "s", "bytes", "Sort results by accumulated packets instead of bytes")
+    flagSet.BoolVar(&config.SortAscending, "a", false, "Sort results in ascending order")
+    flagSet.BoolVar(&config.Incoming, "in", false, "Take into account incoming data (received packets/bytes)")
+    flagSet.BoolVar(&config.Outgoing, "out", false, "Take into account outgoing data (sent packets/bytes)")
+    flagSet.BoolVar(&config.Sum, "sum", false, "Sum incoming and outcoming data")
+    flagSet.IntVar(&config.NumResults, "n", 1000, "Maximum number of final entries to show. Defaults to 95% of the overall data volume / number of packets (depending on the '-p' 60)")
+
+    // Reverse DNS flags
+    flagSet.BoolVar(&config.Resolve, "resolve", false, "Enable reverse DNS lookups in output")
+    flagSet.DurationVar(&config.ResolveTimeout, "resolve-timeout", 1*time.Second, "Timeout for reverse DNS lookups")
+    flagSet.IntVar(&config.ResolveRows, "resolve-rows", 25, "Maximum number of output rows to perform reverse DNS lookups on")
+
+    // intentionally undocumented flag to set maximum percentage of physical memory
+    // to be used before program terminates itself.
+    flagSet.IntVar(&config.MaxMemPercent, "mem", MAXMEMPERCENTDEFAULT, "")
+
+    // choose the last 30 days as default value for the time span, ensuring that
+    // queries never run over data covering more than a month by default. Of course
+    // the parameter can be overridden to cover longer time spans
+    flagSet.StringVar(&config.First, "f", "-30d", "Lower bound on flow timestamp")
+    flagSet.StringVar(&config.Last, "l", "9999999999999999", "Upper bound on flow timestamp")
+
+    parseErr := flagSet.Parse(os.Args[1:])
+    if parseErr != nil {
+        return parseErr
     }
 
-    config.QueryType = (flag.Arg(0))
+    // check if a DB path has been provided. If not, take the default one
+    if config.BaseDir == "" {
+        var dberr error
+        if config.BaseDir, dberr = getDefaultDBDir(); dberr != nil {
+            return dberr
+        }
+    }
+
+    // make sure that the interface was specified
+    if strings.Contains(config.Ifaces, "-") {
+        return errors.New("Interface not specified")
+    }
+
+    // setting the physical memory limit to more memory than the system has is pointless.
+    if config.MaxMemPercent < 0 || 100 < config.MaxMemPercent {
+        return errors.New("Invalid argument for -mem: Maxmimum memory percentage has to lie in interval [0; 100]")
+    }
+
+    if flagSet.NArg() > 1 {
+        return errors.New("Query type must be the last (and only) argument of the call")
+    }
+
+    config.QueryType = (flagSet.Arg(0))
+
+    // by default, we show incoming and outgoing traffic
+    if !config.Incoming && !config.Outgoing && !config.Sum {
+        config.Incoming, config.Outgoing = true, true
+    }
 
     return nil
-}
-
-// Help printing -----------------------------------------------------------------
-func printHelpGenerator(external bool) func() {
-    var helpString string
-    if !external {
-        helpString =
-            `Usage:
-
-    goquery -i <interface> [-hpax] [-in|-out] [-n <max_n>] [-e txt|csv|json] [-d <db-path>]
-    [-f <timestamp>] [-l <timestamp>] [-c <conditions>] [-s <column(s)>] QUERY_TYPE
-
-    Flow database query tool to extract flow statistics from the goDB database
-    created by goProbe. By default, output is written to STDOUT, sorted by overall
-    (incoming and outgoing) data volume in descending order.
-
-    QUERY_TYPE
-        Type of query to perform (top talkers or top applications):
-          talk_src        top talkers by source IP (default)
-          talk_dst        top talkers by destination IP
-          talk_conv       top talkers by IP pairs ("conversation")
-          apps_port       top applications by protocol:[port]
-          apps_dpi        top applications by deep packet inspection (L7)
-          agg_talk_port   aggregation of conversation and applications
-
-    -h
-        Display this help text.
-
-    -help-admin
-        Display advanced options for database maintenance.
-
-    -list, --list
-        List all interfaces on which data was captured and written to the database
-
-    -i
-        Interface for which the query should be performed (e.g. eth0, t4_33760, ...)
-
-    -n
-        Maximum number of final entries to show. Defaults to 95% of the overall
-        data volume / number of packets (depending on the '-p' parameter)
-
-    -in
-        Take into account incoming data only (received packets/bytes).
-
-    -out
-        Take into account outgoing data only (sent packets/bytes).
-
-    -e
-        Output format:
-          txt           Output in plain text format (default)
-          json          Output in JSON format
-          csv           Output in comma-separated table format
-
-    -d
-        Path to goDB database directory <db-path>. By default,
-        /usr/local/goProbe/data/db is used.
-
-    -f / -l
-        Lower / upper bound on flow timestamp. Allowed formats are:
-          1357800683                            EPOCH
-          2006-01-02 15:04:05 -0700 MST         GO DEFAULT FORMAT
-          Mon Jan _2 15:04:05 2006              ANSIC
-          Mon Jan _2 15:04:05 MST 2006          UNIX DATE
-          Mon Jan 02 15:04:05 -0700 2006        RUBY DATE
-          02 Jan 06 15:04 MST                   RFC822
-          02 Jan 06 15:04 -0700                 RFC822Z
-          Monday, 02-Jan-06 15:04:05 MST        RFC850
-          Mon, 02 Jan 2006 15:04:05 MST         RFC1123
-          Mon, 02 Jan 2006 15:04:05 -0700       RFC1123Z
-          2006-01-02T15:04:05Z07:00             RFC3339
-          2006-01-02T15:04:05.999999999Z07:00   RFC3339 NANO
-
-          02.01.2006 15:04:05                   CUSTOM SHORT
-          02.01.2006 15:04                      CUSTOM SHORTER
-          02.01.06 15:04                        
-          2.1.06 15:04                          CUSTOM SHORTEST
-
-          -15d:04h:05m                          RELATIVE
-
-        Relative time will be evaluated with respect to NOW. The call can
-        be varied to include any (integer) combination of days, hours and
-        minutes, e.g.
-
-          -15d:04h:05m, -15d:5m, -15d, -5m, -4h, -4h:05m, etc.
-
-    -c
-        Logical conditions for the query, e.g.
-        "dport=22 AND sip=192.168.0.1 AND proto=17"
-
-        Currently, only the "AND" and "=" operators are supported.
-
-    -p
-        Sort results by accumulated packets instead of bytes.
-
-    -s
-        Sort results by given column name(s) (comma-separated list,
-        overrides -p option, if given).
-
-    -a
-        Sort results in ascending instead of descending order.
-
-    -x
-        Mode for external calls, e.g. from portal. Reduces verbosity of error
-        messages to customer friendly text and writes full error messages
-        to message log instead.
-                        `
-        return func() {
-            fmt.Println(helpString)
-        }
-    } else {
-        return func() {
-            return
-        }
-    }
-
-}
-
-func printAdvancedHelpGenerator(external bool) func() {
-    var advHelpString string
-    if !external {
-        advHelpString =
-            `Advanced maintenance options (should not be used in interactive mode):
-
-    -wipe
-        Wipe all database entries from disk.
-        Handle with utmost care, all changes are permanent and cannot be undone!
-
-    -clean <timestamp>
-        Remove all database rows before given timestamp (retention time).
-        Handle with utmost care, all changes are permanent and cannot be undone!
-        Allowed formats are identical to -f/-l parameters.
-                        `
-        return func() {
-            fmt.Println(advHelpString)
-        }
-    } else {
-        return func() {
-            return
-        }
-    }
-}
-
-// Utility variables and functions for time parsing ------------------------------
-var TimeFormats []string = []string{"2006-01-02 15:04:05 -0700 MST",
-      "Mon Jan _2 15:04:05 2006",
-      "Mon Jan _2 15:04:05 MST 2006",
-      "Mon Jan 02 15:04:05 -0700 2006",
-      "02 Jan 06 15:04 MST",
-      "02 Jan 06 15:04 -0700",
-      "Monday, 02-Jan-06 15:04:05 MST",
-      "Mon, 02 Jan 2006 15:04:05 MST",
-      "Mon, 02 Jan 2006 15:04:05 -0700",
-      "2006-01-02T15:04:05Z07:00",
-      "2006-01-02T15:04:05.999999999Z07:00",
-      "02.01.2006 15:04:05", // custom additions for MC
-      "02.01.2006 15:04",
-      "02.01.06 15:04",
-      "2.1.06 15:04"}
-
-// function returning a UNIX timestamp relative to the current time
-func parseRelativeTime(rtime string) (int64, error) {
-
-    rtime = rtime[1:]
-
-    var secBackwards int64 = 0
-
-    // iterate over different time chunks to get the days, hours and minutes
-    for _, chunk := range strings.Split(rtime, ":"){
-        var err error
-
-        if len(chunk) == 0 {
-            return 0, errors.New("incorrect relative time specification")
-        }
-
-        num := int64(0)
-
-        switch chunk[len(chunk)-1]{
-        case 'd':
-            if num, err = strconv.ParseInt(chunk[:len(chunk)-1], 10, 64); err != nil {
-                return 0, err
-            }
-            secBackwards += 86400*num
-        case 'h':
-            if num, err = strconv.ParseInt(chunk[:len(chunk)-1], 10, 64); err != nil {
-                return 0, err
-            }
-            secBackwards += 3600*num
-        case 'm':
-            if num, err = strconv.ParseInt(chunk[:len(chunk)-1], 10, 64); err != nil {
-                return 0, err
-            }
-            secBackwards += 60*num
-        default:
-            return 0, errors.New("incorrect relative time specification")
-        }
-    }
-
-    return (time.Now().Unix() - secBackwards), nil
-
-}
-
-func parseTimeArgument(timeString string) (int64, error) {
-    var(
-        err  error
-        rerr error
-        t    time.Time
-        tRel int64
-    )
-
-    // check whether a relative timestamp was specified
-    if timeString[0] == '-' {
-        if tRel, rerr = parseRelativeTime(timeString); rerr == nil {
-            return tRel, rerr
-        }
-    }
-
-    // try to interpret string as unix timestamp
-    if i, er := strconv.ParseInt(timeString, 10, 64); er == nil {
-        return i, er
-    }
-
-    // then check other time formats
-    for _, tFormat := range TimeFormats {
-        t, err = time.Parse(tFormat, timeString)
-        if err == nil {
-            return t.Unix(), err
-        }
-    }
-
-    return int64(0), errors.New("\n- "+rerr.Error()+"\n- "+err.Error())
 }
 
 // Database cleanup functions ----------------------------------------------------
@@ -547,62 +321,20 @@ func wipeDB(dbPath string) error {
     return err
 }
 
-// remove those directories whose timestamps are outside of the retention period
-func cleanOldDBDirs(dbPath string, tOldest int64) error {
-    // Get list of files in directory
-    var (
-        ifaceDirList []os.FileInfo
-        dirList      []os.FileInfo
-        err          error
-        dir_name     string
-        tfirst       int64
-    )
-
-    if ifaceDirList, err = ioutil.ReadDir(dbPath); err != nil {
-        return err
-    }
-
-    // check all the interface directories for obsolete timestamps
-    for _, iface := range ifaceDirList {
-        if iface.IsDir() && (iface.Name() != "./" || iface.Name() != "../") {
-            if dirList, err = ioutil.ReadDir(dbPath + "/" + iface.Name()); err != nil {
-                return err
-            }
-
-            for _, file := range dirList {
-                if file.IsDir() && (file.Name() != "./" || file.Name() != "../") {
-                    dir_name = file.Name()
-                    temp_dir_tstamp, _ := strconv.ParseInt(dir_name, 10, 64)
-
-                    // check if the directory is within time frame of interest
-                    if tfirst <= temp_dir_tstamp && temp_dir_tstamp < tOldest+goDB.DB_WRITE_INTERVAL {
-                        // remove the directory
-                        if rmerr := os.RemoveAll(dbPath + "/" + iface.Name() + "/" + dir_name); rmerr != nil {
-                            return rmerr
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return err
-
-}
-
 // Message handling --------------------------------------------------------------
 func throwMsg(msg string, external bool, fmtSpec string) {
     customer_text := "An error occurred while retrieving the requested information"
     out_level := os.Stderr
     status := "error"
 
-    if msg == "Query returned no results" {
+    if strings.HasPrefix(msg, ERROR_NORESULTS) {
         out_level = os.Stdout
-        status = "ok"
+        status = "empty"
     }
 
     // If called interactively, show full error message to user (otherwise show
     // customer friendly generic message)
-    if !(msg != "Query returned no results" && external) {
+    if !(msg != ERROR_NORESULTS && external) {
         customer_text = msg
     }
 
@@ -626,109 +358,120 @@ func throwMsg(msg string, external bool, fmtSpec string) {
     }
 }
 
-// List interfaces for which data is available -----------------------------------
-// Data type used to store any general information about the database
-type DBInfo struct {
-    Size        float32
-    DaysCovered uint8
+func parseIfaceList(dbPath string, ifacelist string) (ifaces []string, err error) {
+    if ifacelist == "" {
+        return nil, fmt.Errorf("No interface(s) specified")
+    }
+
+    if strings.ToLower(ifacelist) == "any" {
+        summary, err := goDB.ReadDBSummary(dbPath)
+        if err != nil {
+            return nil, err
+        }
+        for iface, _ := range summary.Interfaces {
+            ifaces = append(ifaces, iface)
+        }
+    } else {
+        ifaces = strings.Split(ifacelist, ",")
+        for _, iface := range ifaces {
+            if strings.Contains(iface, "-") { // TODO: checking for "-" is kinda ugly
+                err = fmt.Errorf("Invalid interface list")
+                return
+            }
+        }
+    }
+    return
 }
 
-func listAvailableDBs(dbPath string, external bool) error {
-
-    // Get list of files in directory
-    var (
-        ifaceDirList []os.FileInfo
-        dirList      []os.FileInfo
-        fileList     []os.FileInfo
-        err          error
-        dbInfo       map[string]interface{} = make(map[string]interface{})
-    )
-
-    if ifaceDirList, err = ioutil.ReadDir(dbPath); err != nil {
-        return err
+func createWorkManager(dbPath string, iface string, tfirst, tlast int64, query *goDB.Query, numProcessingUnits int) (workManager *goDB.DBWorkManager, nonempty bool, err error) {
+    if workManager, err = goDB.NewDBWorkManager(dbPath, iface, numProcessingUnits); err != nil {
+        return nil, false, fmt.Errorf("Could not initialize query workManager for interface '%s': %s", iface, err)
     }
 
-    dbPathArr := strings.Split(dbPath, "/")
-    if dbPathArr[len(dbPathArr)-1] != "db" {
-        return errors.New("non-standard DB path specified")
-    }
+    nonempty, err = workManager.CreateWorkerJobs(tfirst, tlast, query)
+    return workManager, nonempty, err
+}
 
-    wtxt := tabwriter.NewWriter(os.Stdout, 0, 4, 6, ' ', tabwriter.AlignRight)
-    totalDBSize := float32(0)
+type aggregateResult struct {
+    aggregatedMap map[goDB.ExtraKey]goDB.Val
+    totals        Counts
+    err           error
+}
 
-    // check all the interface directories for obsolete timestamps
-    for _, iface := range ifaceDirList {
-        if iface.IsDir() && (iface.Name() != "./" || iface.Name() != "../") {
-            dayCount := uint8(0)
-            dirSize  := float32(0)
+// receive maps on mapChan until mapChan gets closed.
+// Then send aggregation result over resultChan.
+// If an error occurs, aggregate may return prematurely.
+// Closes resultChan on termination.
+func aggregate(mapChan <-chan map[goDB.ExtraKey]goDB.Val, resultChan chan<- aggregateResult) {
+    defer close(resultChan)
 
-            // count the directories in the interface DB folder
-            if dirList, err = ioutil.ReadDir(dbPath + "/" + iface.Name()); err != nil {
-                return err
+    var finalMap = make(map[goDB.ExtraKey]goDB.Val)
+    var totals Counts
+
+    // Temporary goDB.Val because map values cannot be updated in-place
+    var tempVal goDB.Val
+    var exists bool
+
+    // Create global MemStats object for tracking of memory consumption
+    m := runtime.MemStats{}
+    lastGC := time.Now()
+
+    for item := range mapChan {
+        if item == nil {
+            resultChan <- aggregateResult{
+                err: fmt.Errorf("Error during daily DB processing. Check syslog/messages for more information"),
             }
+            return
+        }
+        for k, v := range item {
+            totals.BytesRcvd += v.NBytesRcvd
+            totals.BytesSent += v.NBytesSent
+            totals.PktsRcvd += v.NPktsRcvd
+            totals.PktsSent += v.NPktsSent
 
-            for _, day := range dirList {
-                if day.IsDir() && (iface.Name() != "./" || iface.Name() != "../") {
-                    dayCount++
-                }
-                if fileList, err =  ioutil.ReadDir(dbPath + "/" + iface.Name() + "/" + day.Name()); err != nil {
-                    return err
-                }
+            if tempVal, exists = finalMap[k]; exists {
+                tempVal.NBytesRcvd += v.NBytesRcvd
+                tempVal.NBytesSent += v.NBytesSent
+                tempVal.NPktsRcvd += v.NPktsRcvd
+                tempVal.NPktsSent += v.NPktsSent
 
-                // get the size of each of the .gpf files
-                for _, file := range fileList {
-                    if !file.IsDir(){
-                        dirSize += float32(file.Size())
-                    }
-                }
+                finalMap[k] = tempVal
+            } else {
+                finalMap[k] = v
             }
+        }
 
-            // store interface entry
-            dbInfo[iface.Name()] = DBInfo{dirSize/1024/1024, dayCount}
-            totalDBSize += dirSize/1024/1024
+        item = nil
+
+        // Conditionally call a manual garbage collection and memory release if the current heap allocation
+        // is above GOGCLIMIT and more than GOGCINTERVAL seconds have passed
+        runtime.ReadMemStats(&m)
+        if m.Sys-m.HeapReleased > GOGCLIMIT && time.Since(lastGC) > GOGCINTERVAL {
+            runtime.GC()
+            debug.FreeOSMemory()
+            lastGC = time.Now()
         }
     }
 
-    // output data in json format if function is called externally
-    if external {
-        var json_bytes []byte
-        var jerr       error
-
-        // add totals line to info struct
-        dbInfo["Total Size"] = totalDBSize
-
-        if json_bytes, jerr = json.Marshal(dbInfo); jerr != nil {
-            return jerr
+    if len(finalMap) == 0 {
+        resultChan <- aggregateResult{
+            err: fmt.Errorf(ERROR_NORESULTS),
         }
-        fmt.Printf(string(json_bytes))
-    // otherwise print to stdout
-    } else {
-        fmt.Println("Available interfaces:")
-        fmt.Fprintln(wtxt, "\t\tDays\t")
-        fmt.Fprintln(wtxt, "Iface\tSize [MB]\tCovered\t")
-        fmt.Fprintln(wtxt, "-----\t---------\t-------\t")
-
-        for key, val := range dbInfo {
-            dbi := val.(DBInfo)
-            fmt.Fprintln(wtxt, key+"\t"+strconv.FormatFloat(float64(dbi.Size), 'f', 3, 32)+"\t"+strconv.Itoa(int(dbi.DaysCovered))+"\t")
-        }
-
-        fmt.Fprintln(wtxt, "\t\t\t")
-        fmt.Fprintln(wtxt, "Total\t"+strconv.FormatFloat(float64(totalDBSize), 'f', 3, 32)+"\t\t")
-        wtxt.Flush()
-        fmt.Println()
+        return
     }
 
-    return err
-
+    resultChan <- aggregateResult{
+        aggregatedMap: finalMap,
+        totals:        totals,
+    }
 }
 
 //--------------------------------------------------------------------------------
 func main() {
-//--------------------------------------------------------------------------------
+    //--------------------------------------------------------------------------------
 
     // CPU Profiling Calls
-    //runtime    runtime.SetBlockProfileRate(10000000) // PROFILING DEBUG
+    //    runtime.SetBlockProfileRate(10000000) // PROFILING DEBUG
     //    f, proferr := os.Create("GPCore.prof")    // PROFILING DEBUG
     //    if proferr != nil {                       // PROFILING DEBUG
     //        fmt.Println("Profiling error: "+proferr.Error()) // PROFILING DEBUG
@@ -740,39 +483,58 @@ func main() {
     numCpu := runtime.NumCPU()
     runtime.GOMAXPROCS(numCpu)
 
+    /// WORKER SETTINGS
+    // explicitly decouple numCpus an numProcessingUnits (but still use numCpu at the moment)
+    numProcessingUnits := numCpu
+
     // Start timing
     tStart := time.Now()
 
     /// COMMAND LINE OPTIONS PARSING ///
-    var queryConfig goDB.GeneralConf
+    var queryConfig Config
     if parseErr := ReadFlags(&queryConfig); parseErr != nil {
+
         // We have to assume here that the call was interactive, since we don't know the
-        // external / format options yet. We also can't throw the help yet.
+        // external / format options yet
+        printHelpFlag := PrintFlagGenerator(false)
+        printHelpFlag("")
+
         throwMsg(parseErr.Error(), false, "txt")
         return
     }
 
-    printHelp := printHelpGenerator(queryConfig.External)
-    printAdvancedHelp := printAdvancedHelpGenerator(queryConfig.External)
+    // verify config format
+    switch queryConfig.Format {
+    case "txt", "csv", "json", "influxdb":
+    default:
+        throwMsg("Unknown output format", false, "txt")
+        return
+    }
+
+    // define help printing functions
+    printUsage := PrintUsageGenerator(queryConfig.External)
+    printHelpFlag := PrintFlagGenerator(queryConfig.External)
 
     // check if only help needs to be printed
     if queryConfig.Help {
-        printHelp()
+        printUsage()
         return
     }
 
     if queryConfig.HelpAdmin {
-        printAdvancedHelp()
+        printHelpFlag("admin")
         return
     }
 
-    // check if list option was called
+    if queryConfig.Version {
+        fmt.Printf("goProbe %s\n", version.VersionText())
+        return
+    }
+
     if queryConfig.ListDB {
-        if lserr := listAvailableDBs(queryConfig.BaseDir, queryConfig.External); lserr != nil {
+        if lserr := listInterfaces(queryConfig.BaseDir, queryConfig.External); lserr != nil {
             throwMsg("Failed to retrieve list of available databases: "+lserr.Error(), queryConfig.External, queryConfig.Format)
         }
-
-        // return in any case since --list is informational
         return
     }
 
@@ -782,469 +544,306 @@ func main() {
             throwMsg("Failed to completely remove database: "+wiperr.Error(), queryConfig.External, queryConfig.Format)
             return
         }
-
         return
     }
 
     if queryConfig.CleanAdmin > 0 {
-        // cleaning code
         if clerr := cleanOldDBDirs(queryConfig.BaseDir, queryConfig.CleanAdmin); clerr != nil {
             throwMsg("Database clean up failed: "+clerr.Error(), queryConfig.External, queryConfig.Format)
         }
-
         return
     }
 
-    // Configuration sanity checks
-    if queryConfig.Iface == "" {
-        throwMsg("No interface specified", queryConfig.External, queryConfig.Format)
-        printHelp()
+    // We are in query mode.
+    // Parse/check corresponding flags.
+
+    ifaces, err := parseIfaceList(queryConfig.BaseDir, queryConfig.Ifaces)
+    if err != nil {
+        printHelpFlag("i")
+        throwMsg(err.Error(), queryConfig.External, queryConfig.Format)
+    }
+
+    if queryConfig.Sort != "bytes" && queryConfig.Sort != "packets" && queryConfig.Sort != "time" {
+        printHelpFlag("s")
+        throwMsg("Incorrect sorting parameter specified", queryConfig.External, queryConfig.Format)
         return
     }
 
-    if (queryConfig.QueryType != "talk_conv" && queryConfig.QueryType != "talk_src" && queryConfig.QueryType != "talk_dst" && queryConfig.QueryType != "apps_port" && queryConfig.QueryType != "apps_dpi" && queryConfig.QueryType != "agg_talk_port") || (queryConfig.QueryType == "") {
-        throwMsg("Invalid query type: "+queryConfig.QueryType, queryConfig.External, queryConfig.Format)
-        printHelp()
+    if queryConfig.QueryType == "" {
+        printHelpFlag("")
+        throwMsg("No query type specified", queryConfig.External, queryConfig.Format)
         return
+    }
+
+    queryAttributes, hasAttrTime, hasAttrIface, err := goDB.ParseQueryType(queryConfig.QueryType)
+    if err != nil {
+        printHelpFlag("")
+        throwMsg(err.Error(), queryConfig.External, queryConfig.Format)
+    }
+
+    // If output format is influx, always take time with you
+    if queryConfig.Format == "influxdb" {
+        hasAttrTime = true
+    }
+
+    // override sorting direction and number of entries for time based queries
+    if hasAttrTime {
+        queryConfig.Sort = "time"
+        queryConfig.SortAscending = true
+        queryConfig.NumResults = 9999999999999999
     }
 
     // parse time bound
     var qcLast, qcFirst int64
-    var lerr            error
-    if qcLast, lerr = parseTimeArgument(queryConfig.Last); lerr != nil {
+    var lerr error
+
+    if qcLast, lerr = goDB.ParseTimeArgument(queryConfig.Last); lerr != nil {
+        printHelpFlag("f")
         throwMsg("Invalid time format: "+lerr.Error(), queryConfig.External, queryConfig.Format)
-        printHelp()
         return
     }
-    if qcFirst, lerr = parseTimeArgument(queryConfig.First); lerr != nil {
+    if qcFirst, lerr = goDB.ParseTimeArgument(queryConfig.First); lerr != nil {
+        printHelpFlag("f")
         throwMsg("Invalid time format: "+lerr.Error(), queryConfig.External, queryConfig.Format)
-        printHelp()
         return
     }
 
-    if (qcLast <= qcFirst) {
+    if qcLast <= qcFirst {
+        printHelpFlag("f")
         throwMsg("Invalid time interval: the lower time bound cannot be greater than the upper time bound"+queryConfig.QueryType, queryConfig.External, queryConfig.Format)
-        printHelp()
+        return
+    }
+
+    // Obtain physical memory of this host
+    var (
+        physMem float64
+        memErr  error
+    )
+
+    if physMem, memErr = getPhysMem(); memErr != nil {
+        throwMsg(memErr.Error(), queryConfig.External, queryConfig.Format)
         return
     }
 
     /// QUERY PREPARATION ///
-    // parse conditions
-    var cond_attr string
-    var cond_bytes []byte
-    var err error
 
-    var conditions []goDB.Condition
+    // If -x is specified, we exclude the management network range.
+    // -x conflicts with the new -in -out behaviour, so we take -in -out to mean
+    // -sum when -x is set.
+    if queryConfig.External {
+        queryConfig.Conditions = excludeManagementNet(queryConfig.Conditions)
 
-    if queryConfig.Conditions != "" {
-        conditionStrings := strings.Split(queryConfig.Conditions, "AND")
+        if queryConfig.Incoming && queryConfig.Outgoing {
+            queryConfig.Sum, queryConfig.Incoming, queryConfig.Outgoing = true, false, false
+        }
+    }
 
-        for _, cond := range conditionStrings {
-            tmp_conds := strings.Split(strings.TrimSpace(cond), "=")
+    var direction Direction
+    switch {
+    case queryConfig.Sum:
+        direction = DIRECTION_SUM
+    case queryConfig.Incoming && !queryConfig.Outgoing:
+        direction = DIRECTION_IN
+    case !queryConfig.Incoming && queryConfig.Outgoing:
+        direction = DIRECTION_OUT
+    default:
+        direction = DIRECTION_BOTH
+    }
 
-            if len(tmp_conds) == 1 {
-                throwMsg("Missing argument to condition. Examples: \"l7proto=SSH\", \"dport=5353\"", queryConfig.External, queryConfig.Format)
-                printHelp()
-                return
-            }
+    var sortOrder SortOrder
+    switch queryConfig.Sort {
+    case "bytes":
+        sortOrder = SORT_TRAFFIC
+    case "time":
+        sortOrder = SORT_TIME
+    case "packets":
+        fallthrough
+    default:
+        sortOrder = SORT_PACKETS
+    }
 
-            cond_attr = tmp_conds[0]
-            if tmp_conds[0] != "l7proto" && tmp_conds[0] != "dip" && tmp_conds[0] != "sip" && tmp_conds[0] != "proto" && tmp_conds[0] != "dport" {
-                throwMsg("Unknown condition: "+queryConfig.Conditions, queryConfig.External, queryConfig.Format)
-                printHelp()
-                return
-            }
+    // sanitize conditional if one was provided
+    var sanErr error
+    queryConfig.Conditions, sanErr = goDB.SanitizeUserInput(queryConfig.Conditions)
+    if sanErr != nil {
+        printHelpFlag("c")
+        throwMsg("Input sanitization error: "+sanErr.Error(), queryConfig.External, queryConfig.Format)
+        return
+    }
 
-            // translate the indicated value into bytes
-            var num uint64
-            var isIn bool
+    // build condition tree to check if there is a syntax error before starting processing
+    queryConditional, parseErr := goDB.ParseAndInstrumentConditional(queryConfig.Conditions, queryConfig.ResolveTimeout)
+    if parseErr != nil {
+        printHelpFlag("c")
+        throwMsg("Condition error:\n"+parseErr.Error(), queryConfig.External, queryConfig.Format)
+        return
+    }
 
-            switch cond_attr {
-            case "l7proto":
-                if num, err = strconv.ParseUint(tmp_conds[1], 10, 16); err != nil {
-                    if num, isIn = goDB.GetDPIProtoID(tmp_conds[1]); isIn == false {
-                        throwMsg("Could not parse condition value: "+err.Error(), queryConfig.External, queryConfig.Format)
-                        return
-                    }
-                }
+    query := goDB.NewQuery(queryAttributes, queryConditional, hasAttrTime, hasAttrIface)
 
-                cond_bytes = []byte{uint8(num >> 8), uint8(num & 0xff)}
-            case "dip":
-                cond_bytes = IPStringToBytes(tmp_conds[1])
-
-                if cond_bytes == nil {
-                    throwMsg("Could not parse IP address: "+tmp_conds[1], queryConfig.External, queryConfig.Format)
-                    return
-                }
-            case "sip":
-                cond_bytes = IPStringToBytes(tmp_conds[1])
-
-                if cond_bytes == nil {
-                    throwMsg("Could not parse IP address: "+tmp_conds[1], queryConfig.External, queryConfig.Format)
-                    return
-                }
-            case "proto":
-                if num, err = strconv.ParseUint(tmp_conds[1], 10, 16); err != nil {
-                    if num, isIn = goDB.GetIPProtoID(tmp_conds[1]); isIn == false {
-                        throwMsg("Could not parse condition value: "+err.Error(), queryConfig.External, queryConfig.Format)
-                        return
-                    }
-                }
-
-                cond_bytes = []byte{uint8(num & 0xff)}
-            case "dport":
-                if num, err = strconv.ParseUint(tmp_conds[1], 10, 16); err != nil {
-                    throwMsg("Could not parse condition value: "+err.Error(), queryConfig.External, queryConfig.Format)
-                    return
-                }
-
-                cond_bytes = []byte{uint8(num >> 8), uint8(num & 0xff)}
-            }
-
-            conditions = append(conditions, goDB.NewCondition(cond_attr, cond_bytes))
+    // Chek whether DNS works on this system
+    if queryConfig.Resolve {
+        if err := checkDNS(); err != nil {
+            throwMsg("DNS warning: "+err.Error(), queryConfig.External, queryConfig.Format)
         }
     }
 
     /// DATA ACQUISITION AND PREPARATION ///
-    // prepare the final map for
-    FinalMap := make(map[goDB.Key]*goDB.Val)
-    var SumBytesRcvd, SumBytesSent, SumPktsRcvd, SumPktsSent int
+
+    // Start ticker to check memory consumption every second
+    memTicker := time.NewTicker(MEMCHECKINTERVAL)
+    go func() {
+        m := runtime.MemStats{}
+        for range memTicker.C {
+            runtime.ReadMemStats(&m)
+
+            // Check if current memory consumption is higher than maximum allowed percentage of the available
+            // physical memory
+            if (m.Sys-m.HeapReleased)/1024 > uint64(float64(queryConfig.MaxMemPercent)*physMem/100) {
+                memTicker.Stop()
+                msg := fmt.Sprintf("Memory consumption above %v%% of physical memory. Aborting query", queryConfig.MaxMemPercent)
+                throwMsg(msg, queryConfig.External, queryConfig.Format)
+                os.Exit(1)
+            }
+        }
+    }()
+
+    // create work managers
+    workManagers := map[string]*goDB.DBWorkManager{} // map interfaces to workManagers
+    for _, iface := range ifaces {
+        wm, nonempty, err := createWorkManager(queryConfig.BaseDir, iface, qcFirst, qcLast, query, numProcessingUnits)
+        if err != nil {
+            throwMsg(err.Error(), queryConfig.External, queryConfig.Format)
+            return
+        }
+        // Only add work managers that have work to do.
+        if nonempty {
+            workManagers[iface] = wm
+        }
+    }
+
+    // the covered time period is the union of all covered times
+    tSpanFirst, tSpanLast := time.Now().AddDate(100, 0, 0), time.Time{} // a hundred years in the future, the beginning of time
+    for _, workManager := range workManagers {
+        t0, t1 := workManager.GetCoveredTimeInterval()
+        if t0.Before(tSpanFirst) {
+            tSpanFirst = t0
+        }
+        if tSpanLast.Before(t1) {
+            tSpanLast = t1
+        }
+    }
 
     // Channel for handling of returned maps
-    mapChan := make(chan map[goDB.Key]*goDB.Val)
-    quitChan := make(chan bool)
+    mapChan := make(chan map[goDB.ExtraKey]goDB.Val, 1024)
+    aggregateChan := make(chan aggregateResult, 1)
+    go aggregate(mapChan, aggregateChan)
 
-    // create workload
-    var workload *goDB.GPWorkload
-    var workErr  error
-    if workload, workErr = goDB.NewGPWorkload(queryConfig.BaseDir + "/" + queryConfig.Iface); workErr != nil {
-        throwMsg("Could not initialize query workload: "+err.Error(), queryConfig.External, queryConfig.Format)
+    // spawn reader processing units and make them work on the individual DB blocks
+    for _, workManager := range workManagers {
+        workManager.ExecuteWorkerReadJobs(mapChan)
+    }
+    // we are done with all worker jobs
+    close(mapChan)
+
+    agg := <-aggregateChan
+
+    if agg.err != nil {
+        throwMsg(agg.err.Error(), queryConfig.External, queryConfig.Format)
         return
     }
-
-    if err := workload.CreateWorkerJobs(qcFirst, qcLast); err != nil {
-        throwMsg("Query returned no results", queryConfig.External, queryConfig.Format)
-        return
-    }
-
-    // spawn reader workers and make them execute their tasks
-    workload.ExecuteWorkerReadJobs(queryConfig.QueryType, conditions, mapChan, quitChan)
-
-    // This is where the magic happens:
-    // aggregate the maps created by the individual workers
-    var num_finished int
-    var num_workers int = workload.GetNumWorkers()
-
-mapJoin:
-    for {
-        select {
-        case item := <-mapChan:
-            for k, v := range item {
-                SumBytesRcvd += int(v.NBytesRcvd)
-                SumBytesSent += int(v.NBytesSent)
-                SumPktsRcvd += int(v.NPktsRcvd)
-                SumPktsSent += int(v.NPktsSent)
-
-                if toUpdate, exists := FinalMap[k]; exists {
-                    toUpdate.NBytesRcvd += v.NBytesRcvd
-                    toUpdate.NBytesSent += v.NBytesSent
-                    toUpdate.NPktsRcvd += v.NPktsRcvd
-                    toUpdate.NPktsSent += v.NPktsSent
-                } else {
-                    FinalMap[k] = &goDB.Val{v.NBytesRcvd, v.NBytesSent, v.NPktsRcvd, v.NPktsSent}
-                }
-            }
-        case quit := <-quitChan:
-            if quit {
-                num_finished++
-            }
-            if num_finished == num_workers {
-                break mapJoin
-            }
-        }
-    }
-
-    if len(FinalMap) == 0 {
-        throwMsg("Query returned no results", queryConfig.External, queryConfig.Format)
-        return
-    }
-
-    tStop := time.Now()
 
     /// DATA PRESENATION ///
-    // prepare header
-    var header []string
-    var sorting string = "accumulated "
-
-    if queryConfig.Sort {
-        sorting += "packets "
-    } else {
-        sorting += "data volume "
-    }
-
-    if queryConfig.Incoming && !queryConfig.Outgoing {
-        sorting += "(received only)"
-    } else if !queryConfig.Incoming && queryConfig.Outgoing {
-        sorting += "(sent only)"
-    } else {
-        sorting += "(sent and received)"
-    }
-
-    switch queryConfig.QueryType {
-    case "talk_conv":
-        header = append(header, "sip", "dip")
-    case "talk_src":
-        header = append(header, "sip")
-    case "talk_dst":
-        header = append(header, "dip")
-    case "apps_port":
-        header = append(header, "dport", "proto")
-    case "apps_dpi":
-        header = append(header, "l7proto", "category")
-    case "agg_talk_port":
-        header = append(header, "sip", "dip", "dport", "proto")
-    }
-
-    header = append(header, "packets", "%", "data vol.", "%")
-
-    wtxt := tabwriter.NewWriter(os.Stdout, 0, 1, 3, ' ', tabwriter.AlignRight)
-    wcsv := csv.NewWriter(os.Stdout)
-    var wjson map[string]interface{}
-    var json_row_data []map[string]interface{}
-
-    switch queryConfig.Format {
-    case "txt":
-        fmt.Println("Your query:", queryConfig.QueryType)
-        fmt.Println("Conditions:", queryConfig.Conditions)
-        fmt.Println("Sort by:   ", sorting)
-        fmt.Println("Interface: ", queryConfig.Iface)
-        fmt.Println("Query produced", len(FinalMap), "hits and took", tStop.Sub(tStart).String(), "\n")
-        fmt.Fprintln(wtxt, strings.Join(header, "\t")+"\t")
-    case "csv":
-        wcsv.Write(header)
-    case "json":
-        header[len(header)-1] = "bytes_percent"
-        header[len(header)-2] = "bytes"
-        header[len(header)-3] = "packets_percent"
-        header[len(header)-4] = "packets"
-    }
-
-    var num_printed int
-    var sum_packets, sum_bytes int
-
-    // The actual sorting functions
-    var Bytes, Packets func(e1, e2 *Entry) bool
-
-    if queryConfig.SortAscending {
-        Bytes = func(e1, e2 *Entry) bool {
-            return e1.nB < e2.nB
-        }
-        Packets = func(e1, e2 *Entry) bool {
-            return e1.nP < e2.nP
-        }
-    } else {
-        Bytes = func(e1, e2 *Entry) bool {
-            return e1.nB > e2.nB
-        }
-        Packets = func(e1, e2 *Entry) bool {
-            return e1.nP > e2.nP
-        }
-    }
-
-    var mapEntries []Entry = make([]Entry, len(FinalMap))
+    var mapEntries []Entry = make([]Entry, len(agg.aggregatedMap))
+    var val goDB.Val
     count := 0
-    for key, val := range FinalMap {
-        mapEntries[count].k = key
-        mapEntries[count].v = *val
-        if queryConfig.Incoming && !queryConfig.Outgoing {
-            mapEntries[count].nB = val.NBytesRcvd
-            mapEntries[count].nP = val.NPktsRcvd
-        } else if !queryConfig.Incoming && queryConfig.Outgoing {
-            mapEntries[count].nB = val.NBytesSent
-            mapEntries[count].nP = val.NPktsSent
-        } else {
-            mapEntries[count].nB = val.NBytesRcvd + val.NBytesSent
-            mapEntries[count].nP = val.NPktsRcvd + val.NPktsSent
-        }
+
+    for mapEntries[count].k, val = range agg.aggregatedMap {
+
+        mapEntries[count].nBr = val.NBytesRcvd
+        mapEntries[count].nPr = val.NPktsRcvd
+        mapEntries[count].nBs = val.NBytesSent
+        mapEntries[count].nPs = val.NPktsSent
+
         count++
     }
 
-    if queryConfig.Sort {
-        By(Packets).Sort(mapEntries)
-    } else {
-        By(Bytes).Sort(mapEntries)
+    // Now is a good time to release memory one last time for the final processing step
+    agg.aggregatedMap = nil
+    runtime.GC()
+    debug.FreeOSMemory()
+
+    // there is no need to sort influxdb datapoints
+    if queryConfig.Format != "influxdb" {
+        By(sortOrder, direction, queryConfig.SortAscending).Sort(mapEntries)
     }
 
-    for _, map_entry := range mapEntries {
-        if num_printed < queryConfig.NumResults && num_printed < MAX_PRINTED_ENTRIES {
-            var elements []interface{}
-            switch queryConfig.QueryType {
-            case "talk_conv":
-                elements = append(elements, rawIpToString(map_entry.k.Sip[:]), rawIpToString(map_entry.k.Dip[:]))
-            case "talk_src":
-                elements = append(elements, rawIpToString(map_entry.k.Sip[:]))
-            case "talk_dst":
-                elements = append(elements, rawIpToString(map_entry.k.Dip[:]))
-            case "apps_port":
-                if queryConfig.Format != "json" {
-                    elements = append(elements, strconv.Itoa(int(uint16(map_entry.k.Dport[0])<<8|uint16(map_entry.k.Dport[1]))), goDB.GetIPProto(int(map_entry.k.Protocol)))
-                } else {
-                    elements = append(elements, int(uint16(map_entry.k.Dport[0])<<8|uint16(map_entry.k.Dport[1])), goDB.GetIPProto(int(map_entry.k.Protocol)))
-                }
-            case "apps_dpi":
-                l7proto, category := goDB.GetDPIProtoCat(int(uint16(map_entry.k.L7proto[0])<<8 | uint16(map_entry.k.L7proto[1])))
-                if l7proto=="" {
-                    l7proto = "Unknown"
-                }
-                if category=="" {
-                    category = "Uncategorised"
-                }
-
-                elements = append(elements, l7proto, category)
-            case "agg_talk_port":
-                if queryConfig.Format != "json" {
-                elements = append(elements,
-                    rawIpToString(map_entry.k.Sip[:]), rawIpToString(map_entry.k.Dip[:]),
-                    strconv.Itoa(int(uint16(map_entry.k.Dport[0])<<8|uint16(map_entry.k.Dport[1]))), goDB.GetIPProto(int(map_entry.k.Protocol)))
-                } else {
-                elements = append(elements,
-                    rawIpToString(map_entry.k.Sip[:]), rawIpToString(map_entry.k.Dip[:]),
-                    int(uint16(map_entry.k.Dport[0])<<8|uint16(map_entry.k.Dport[1])), goDB.GetIPProto(int(map_entry.k.Protocol)))
-                }
+    // Find map from ips to domains for reverse DNS
+    var ips2domains map[string]string
+    var resolveDuration time.Duration
+    if queryConfig.Resolve && goDB.HasDNSAttributes(queryAttributes) {
+        var ips []string
+        var sip, dip goDB.Attribute
+        for _, attribute := range queryAttributes {
+            if attribute.Name() == "sip" {
+                sip = attribute
             }
-
-            if queryConfig.Incoming && !queryConfig.Outgoing {
-                sum_packets = int(SumPktsRcvd)
-                sum_bytes = int(SumBytesRcvd)
-
-                // catch division by zero
-                if sum_packets == 0 {
-                    sum_packets = 1
-                }
-                if sum_bytes == 0 {
-                    sum_bytes = 1
-                }
-
-                if queryConfig.Format == "txt" {
-                    elements = append(elements, humanize(int(map_entry.v.NPktsRcvd), 1000), strconv.FormatFloat(100.*float64(map_entry.v.NPktsRcvd)/float64(sum_packets), 'f', 2, 64))
-                    elements = append(elements, humanize(int(map_entry.v.NBytesRcvd), 1024), strconv.FormatFloat(100.*float64(map_entry.v.NBytesRcvd)/float64(sum_bytes), 'f', 2, 64))
-                } else if queryConfig.Format == "json" {
-                    elements = append(elements, uint64(map_entry.v.NPktsRcvd), 100.*float64(map_entry.v.NPktsRcvd)/float64(sum_packets))
-                    elements = append(elements, uint64(map_entry.v.NBytesRcvd), 100.*float64(map_entry.v.NBytesRcvd)/float64(sum_bytes))
-                } else {
-                    elements = append(elements, strconv.FormatUint(uint64(map_entry.v.NPktsRcvd), 10), strconv.FormatFloat(100.*float64(map_entry.v.NPktsRcvd)/float64(sum_packets), 'f', 2, 64))
-                    elements = append(elements, strconv.FormatUint(uint64(map_entry.v.NBytesRcvd), 10), strconv.FormatFloat(100.*float64(map_entry.v.NBytesRcvd)/float64(sum_bytes), 'f', 2, 64))
-                }
-            } else if !queryConfig.Incoming && queryConfig.Outgoing {
-                sum_packets = int(SumPktsSent)
-                sum_bytes = int(SumBytesSent)
-
-                // catch division by zero
-                if sum_packets == 0 {
-                    sum_packets = 1
-                }
-                if sum_bytes == 0 {
-                    sum_bytes = 1
-                }
-
-                if queryConfig.Format == "txt" {
-                    elements = append(elements, humanize(int(map_entry.v.NPktsSent), 1000), strconv.FormatFloat(100.*float64(map_entry.v.NPktsSent)/float64(sum_packets), 'f', 2, 64))
-                    elements = append(elements, humanize(int(map_entry.v.NBytesSent), 1024), strconv.FormatFloat(100.*float64(map_entry.v.NBytesSent)/float64(sum_bytes), 'f', 2, 64))
-                } else if queryConfig.Format == "json" {
-                    elements = append(elements, uint64(map_entry.v.NPktsSent), 100.*float64(map_entry.v.NPktsSent)/float64(sum_packets))
-                    elements = append(elements, uint64(map_entry.v.NBytesSent), 100.*float64(map_entry.v.NBytesSent)/float64(sum_bytes))
-                } else {
-                    elements = append(elements, strconv.FormatUint(uint64(map_entry.v.NPktsSent), 10), strconv.FormatFloat(100.*float64(map_entry.v.NPktsSent)/float64(sum_packets), 'f', 2, 64))
-                    elements = append(elements, strconv.FormatUint(uint64(map_entry.v.NBytesSent), 10), strconv.FormatFloat(100.*float64(map_entry.v.NBytesSent)/float64(sum_bytes), 'f', 2, 64))
-                }
-            } else {
-                sum_packets = int(SumPktsRcvd + SumPktsSent)
-                sum_bytes = int(SumBytesRcvd + SumBytesSent)
-
-                // catch division by zero
-                if sum_packets == 0 {
-                    sum_packets = 1
-                }
-                if sum_bytes == 0 {
-                    sum_bytes = 1
-                }
-
-                if queryConfig.Format == "txt" {
-                    elements = append(elements, humanize(int(map_entry.v.NPktsRcvd+map_entry.v.NPktsSent), 1000), strconv.FormatFloat(100.*float64(map_entry.v.NPktsRcvd+map_entry.v.NPktsSent)/float64(sum_packets), 'f', 2, 64))
-                    elements = append(elements, humanize(int(map_entry.v.NBytesRcvd+map_entry.v.NBytesSent), 1024), strconv.FormatFloat(100.*float64(map_entry.v.NBytesRcvd+map_entry.v.NBytesSent)/float64(sum_bytes), 'f', 2, 64))
-                } else if queryConfig.Format == "json" {
-                    elements = append(elements, int(map_entry.v.NPktsRcvd+map_entry.v.NPktsSent), 100.*float64(map_entry.v.NPktsRcvd+map_entry.v.NPktsSent)/float64(sum_packets))
-                    elements = append(elements, int(map_entry.v.NBytesRcvd+map_entry.v.NBytesSent), 100.*float64(map_entry.v.NBytesRcvd+map_entry.v.NBytesSent)/float64(sum_bytes))
-                } else {
-                    elements = append(elements, strconv.FormatUint(uint64(map_entry.v.NPktsRcvd+map_entry.v.NPktsSent), 10), strconv.FormatFloat(100.*float64(map_entry.v.NPktsRcvd+map_entry.v.NPktsSent)/float64(sum_packets), 'f', 2, 64))
-                    elements = append(elements, strconv.FormatUint(uint64(map_entry.v.NBytesRcvd+map_entry.v.NBytesSent), 10), strconv.FormatFloat(100.*float64(map_entry.v.NBytesRcvd+map_entry.v.NBytesSent)/float64(sum_bytes), 'f', 2, 64))
-                }
-            }
-
-            switch queryConfig.Format {
-            case "txt":
-                strele := make([]string, len(elements))
-                for i, v := range elements {
-                    strele[i] = v.(string)
-                }
-                fmt.Fprintln(wtxt, strings.Join(strele, "\t")+"\t")
-            case "csv":
-                strele := make([]string, len(elements))
-                for i, v := range elements {
-                    strele[i] = v.(string)
-                }
-                wcsv.Write(strele)
-            case "json":
-                json_row := make(map[string]interface{})
-
-                for i, title := range header {
-                    json_row[title] = elements[i]
-                }
-
-                json_row_data = append(json_row_data, json_row)
+            if attribute.Name() == "dip" {
+                dip = attribute
             }
         }
 
-        num_printed++
+        for i, l := 0, len(mapEntries); i < l && i < queryConfig.ResolveRows; i++ {
+            key := mapEntries[i].k
+            if sip != nil {
+                ips = append(ips, sip.ExtractStrings(&key)[0])
+            }
+            if dip != nil {
+                ips = append(ips, dip.ExtractStrings(&key)[0])
+            }
+        }
+
+        resolveStart := time.Now()
+        ips2domains = timedReverseLookup(ips, queryConfig.ResolveTimeout)
+        resolveDuration = time.Now().Sub(resolveStart)
     }
 
-    switch queryConfig.Format {
-    case "txt":
-        wtxt.Flush()
-        fmt.Println("\nOverall packets:", humanize(sum_packets, 1000), ", Overall data volume:", humanize(sum_bytes, 1024))
-    case "csv":
-        wcsv.Write([]string{"Overall packets", strconv.Itoa(sum_packets)})
-        wcsv.Write([]string{"Overall data volume (bytes)", strconv.Itoa(sum_bytes)})
-        wcsv.Write([]string{"Sorting and flow direction", sorting})
-        wcsv.Write([]string{"Interface", queryConfig.Iface})
-        wcsv.Flush()
-    case "json":
-        wjson = make(map[string]interface{})
-
-        wjson["status"] = "ok"
-        wjson[queryConfig.QueryType] = json_row_data
-        wjson["summary"] = map[string]interface{}{
-            "interface":     queryConfig.Iface,
-            "total_packets": sum_packets,
-            "total_bytes":   sum_bytes,
-        }
-        wjson["ext_ips"] = getExternalIPs()
-
-        // encode the json data
-        var json_bytes []byte
-        var err error
-
-        if json_bytes, err = json.Marshal(wjson); err != nil {
-            throwMsg("Failed to create json data: "+err.Error(), queryConfig.External, queryConfig.Format)
-            return
-        }
-
-        if queryConfig.External {
-            fmt.Printf(string(json_bytes))
-        } else {
-            fmt.Println(string(json_bytes))
-        }
+    // get the right printer
+    var printer TablePrinter
+    if printer, err = NewTablePrinter(
+        queryConfig,
+        sortOrder,
+        direction,
+        hasAttrTime, hasAttrIface,
+        queryAttributes,
+        ips2domains,
+        agg.totals,
+        count,
+    ); err != nil {
+        throwMsg("Failed to create printer: "+err.Error(), queryConfig.External, queryConfig.Format)
+        return
     }
+
+    // stop timing everything related to the query
+    tStop := time.Now()
+
+    // fill the printer
+    if queryConfig.NumResults < len(mapEntries) {
+        mapEntries = mapEntries[:queryConfig.NumResults]
+    }
+    for _, entry := range mapEntries {
+        printer.AddRow(entry)
+    }
+
+    printer.Footer(queryConfig.Conditions, tSpanFirst, tSpanLast, tStop.Sub(tStart), resolveDuration)
+
+    // print the data
+    if perr := printer.Print(); perr != nil {
+        throwMsg(perr.Error(), queryConfig.External, queryConfig.Format)
+        return
+    }
+
+    memTicker.Stop()
 
     return
 }
