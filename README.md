@@ -68,7 +68,7 @@ The configuration is stored as JSON and looks like this:
       "bpf_filter" : "not arp and not icmp",
       "buf_size" : 1048576,
       "promisc" : true
-    }  
+    }
   }
 }
 ```
@@ -157,11 +157,15 @@ Before running the installer, make sure that you have the following dependencies
 * yacc
 * bison
 * curl
+* build-essential
+* flex
+* socat
+* rsync
 
 The package itself was designed to work out of the box. Thus, you do not even need the `go` environment. All of the dependencies are downloaded during package configuration. To install the package, go to the directory into which you cloned this repository and run the following commands:
 
 ```
-sudo -s
+sudo apt-get install yacc bison curl build-essential flex socat rsync
 make all
 ```
 
@@ -171,6 +175,8 @@ Above command runs the following targets:
 * `make configure`: downloads the dependencies, configures them and applies patches (if necessary)
 * `make compile`: compiles dependencies, goProbe and goQuery
 * `make install`: set up package as a binary tree. The binaries and used libraries are placed in `/opt/ntm/goProbe` per default. The init script can be found under `/etc/init.d/goprobe.init`. It is also possible to install a cronjob used to clean up outdated database entries. It is not installed by default. Uncomment the line in the Makefile if you need this feature. The cronjob can be found in `/etc/cron.d/goprobe.cron`
+
+Additional targets for deployment are:
 * `make deploy`: syncs the binary tree to the root directory. *Note:* this is only a good idea if you want to run goProbe on the system where you compiled it.
 * `make package`: creates a tarball for deployment on another system.
 
