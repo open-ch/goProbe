@@ -157,18 +157,17 @@ Installation
 
 
 Before running the installer, make sure that you have the following dependencies installed:
-* yacc
+* flex
 * bison
 * curl
 * build-essential
-* flex
 * socat
 * rsync
 
 The package itself was designed to work out of the box. Thus, you do not even need the `go` environment. All of the dependencies are downloaded during package configuration. To install the package, go to the directory into which you cloned this repository and run the following commands:
 
 ```
-sudo apt-get install yacc bison curl build-essential flex socat rsync
+sudo apt-get install flex bison curl build-essential socat rsync
 make all
 ```
 

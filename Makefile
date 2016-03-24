@@ -156,6 +156,7 @@ go_install:
 
 	# additional directories
 	echo "*** creating binary tree ***"
+	mkdir -p absolute$(PREFIX)/$(PKG)/bin    && chmod 755 absolute$(PREFIX)/$(PKG)/bin
 	mkdir -p absolute$(PREFIX)/$(PKG)/etc    && chmod 755 absolute$(PREFIX)/$(PKG)/etc
 	mkdir -p absolute$(PREFIX)/$(PKG)/shared && chmod 755 absolute$(PREFIX)/$(PKG)/shared
 	mkdir -p absolute/etc/init.d             && chmod 755 absolute/etc/init.d
