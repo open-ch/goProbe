@@ -47,7 +47,7 @@ Capturing is performed concurrently by goProbe on multiple interfaces. goProbe i
 The capturing probe can be run as a daemon via
 
 ```
-/etc/init.d/goprobe.init {start|stop|status|restart|reload|force-reload}
+/etc/init.d/goprobe.init {start|stop|info|restart|reload|force-reload}
 ```
 
 ### Configuration
