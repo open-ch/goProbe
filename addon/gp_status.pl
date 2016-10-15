@@ -95,6 +95,7 @@ my $iface_states;
 # this script reads from STDIN
 while(<>) {
     chomp($_);
+    next if $_ =~ /^$/;
     if ($lnum == 0) {
         ($detailed, $time_elapsed) = split(" ", $_);
         $lnum++; next;
