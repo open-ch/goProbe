@@ -39,8 +39,8 @@ DOWNLOAD	= curl --progress-bar -L --url
 GO_PRODUCT	    = goProbe
 GO_QUERY        = goQuery
 
-GOLANG		    = go1.6.linux-amd64
-GOLANG_SITE	    = https://storage.googleapis.com/golang
+GOLANG		    = go1.7.1.linux-amd64
+GOLANG_SITE	  = https://storage.googleapis.com/golang
 GO_SRCDIR	    = $(PWD)/addon/gocode/src
 
 # for providing the go compiler with the right env vars
