@@ -26,7 +26,6 @@ goProbe
 * Source and Destination IP
 * IP Protocol
 * Destination Port (if available)
-* Application Layer Protocol
 
 Available flow counters are:
 
@@ -47,7 +46,7 @@ Capturing is performed concurrently by goProbe on multiple interfaces. goProbe i
 The capturing probe can be run as a daemon via
 
 ```
-/etc/init.d/goprobe.init {start|stop|info|restart|reload|force-reload}
+/etc/init.d/goprobe.init {start|stop|status|restart|reload|force-reload}
 ```
 
 ### Configuration
@@ -90,7 +89,6 @@ goQuery
 
 * Top talkers: show data traffic volume of all unique IP pairs
 * Top Applications (port/protocol): traffic volume of all unique destination port-transport protocol pairs, e.g., 443/TCP
-* Top Applications (layer 7): traffic volume by application layer protocol, e.g. SSH, HTTP, etc.
 
 ### Usage
 
@@ -130,10 +128,10 @@ Conditions:          : dport = 443
 If you use `goConvert`, you need to make sure that the data which you are importing is _temporally ordered_ and provides a column which stores UNIX timestamps. An example `csv` file may look as follows:
 
 ```
-# HEADER: bytes_rcvd,bytes_sent,dip,dport,l7_proto,packets_rcvd,packets_sent,proto,sip,tstamp
+# HEADER: bytes_rcvd,bytes_sent,dip,dport,packets_rcvd,packets_sent,proto,sip,tstamp
 ...
-40,72,172.23.34.171,8080,158,1,1,6,10.11.72.28,1392997558
-40,72,172.23.34.171,49362,158,1,1,6,10.11.72.28,1392999058
+40,72,172.23.34.171,8080,1,1,6,10.11.72.28,1392997558
+40,72,172.23.34.171,49362,1,1,6,10.11.72.28,1392999058
 ...
 ```
 You _must_ abide by this structure, otherwise the conversion will fail.
@@ -157,28 +155,22 @@ Installation
 
 
 Before running the installer, make sure that you have the following dependencies installed:
-* flex
+* yacc
 * bison
 * curl
 * build-essential
+* flex
 * socat
 * rsync
 
 The package itself was designed to work out of the box. Thus, you do not even need the `go` environment. All of the dependencies are downloaded during package configuration. To install the package, go to the directory into which you cloned this repository and run the following commands:
 
 ```
-sudo apt-get install flex bison curl build-essential socat rsync
+sudo apt-get install yacc bison curl build-essential flex socat rsync
 make all
 ```
 
-Above command runs the following targets:
-
-* `make clean`: removes all dependencies and compiled binaries
-* `make configure`: downloads the dependencies, configures them and applies patches (if necessary)
-* `make compile`: compiles dependencies, goProbe and goQuery
-* `make install`: set up package as a binary tree. The binaries and used libraries are placed in `/opt/ntm/goProbe` per default. The init script can be found under `/etc/init.d/goprobe.init`. It is also possible to install a cronjob used to clean up outdated database entries. It is not installed by default. Uncomment the line in the Makefile if you need this feature. The cronjob can be found in `/etc/cron.d/goprobe.cron`
-
-Additional targets for deployment are:
+Additional Makefile targets for deployment are:
 * `make deploy`: syncs the binary tree to the root directory. *Note:* this is only a good idea if you want to run goProbe on the system where you compiled it.
 * `make package`: creates a tarball for deployment on another system.
 
@@ -218,7 +210,8 @@ _goquery() {
 goProbe is currently set up to run on Linux based systems. Tested versions include:
 
 * Ubuntu 14.04/15.04
-* Debian 7/8
+* Debian 7/8/9
+* Fedora 28
 
 Authors & Contributors
 ----------------------
